@@ -124,6 +124,9 @@ npm start
 **뉴스 카테고리/개수** — `src/fetch-news.mjs`의 `PROMPT` 수정
 
 **이메일 디자인** — `src/email-template.mjs`의 `CATEGORIES` 색상 및 `renderCard` 수정
+- 메일은 **다크 테마 전용**입니다. PC·모바일 모두 동일하게 보이도록 `color-scheme`/
+  `supported-color-schemes` 메타와 배경 `bgcolor` 속성으로 클라이언트의 라이트 자동변환을
+  막아두었습니다. (단, Outlook 등 일부 구형 클라이언트는 100% 보장은 어려움)
 
 **주말 제외** — `daily.yml`의 cron을 `"0 23 * * 0-4"`로 변경 (일~목 UTC = 월~금 KST)
 
