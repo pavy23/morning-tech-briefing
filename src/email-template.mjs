@@ -36,7 +36,7 @@ function renderCard(item, idx) {
   return `
   <tr>
     <td style="padding:0 0 12px 0;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0d1525;border:1px solid rgba(255,255,255,0.08);border-left:3px solid ${cat.color};border-radius:0 12px 12px 0;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#0d1525" style="background-color:#0d1525;border:1px solid rgba(255,255,255,0.08);border-left:3px solid ${cat.color};border-radius:0 12px 12px 0;">
         <tr>
           <td style="padding:16px 18px;">
             <!-- 상단 메타 -->
@@ -83,18 +83,28 @@ export function buildEmailHTML({ items, fetchedAt }) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<!-- 이 메일은 다크 디자인 전용 → 클라이언트가 라이트로 반전하지 않도록 명시 -->
 <meta name="color-scheme" content="dark">
+<meta name="supported-color-schemes" content="dark">
 <title>Morning Tech Briefing</title>
+<style>
+  :root { color-scheme: dark; supported-color-schemes: dark; }
+  /* 일부 클라이언트의 자동 라이트 변환에도 배경/글자색 유지 */
+  body, .bg-page { background-color: #080C14 !important; }
+  @media (prefers-color-scheme: light) {
+    body, .bg-page { background-color: #080C14 !important; }
+  }
+</style>
 </head>
-<body style="margin:0;padding:0;background:#080C14;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#080C14;">
+<body class="bg-page" bgcolor="#080C14" style="margin:0;padding:0;background-color:#080C14;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#080C14" class="bg-page" style="background-color:#080C14;">
   <tr>
-    <td align="center" style="padding:0;">
+    <td align="center" bgcolor="#080C14" style="padding:0;background-color:#080C14;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;margin:0 auto;font-family:'Apple SD Gothic Neo',-apple-system,'Malgun Gothic',sans-serif;">
 
         <!-- 헤더 -->
         <tr>
-          <td style="background:#0D1525;border-bottom:1px solid rgba(0,212,255,0.15);padding:28px 24px 22px;">
+          <td bgcolor="#0D1525" style="background-color:#0D1525;border-bottom:1px solid rgba(0,212,255,0.15);padding:28px 24px 22px;">
             <div style="font-size:11px;letter-spacing:0.15em;color:#5A6A7E;text-transform:uppercase;font-weight:600;margin-bottom:6px;">● Daily Tech Briefing</div>
             <div style="font-size:26px;font-weight:800;color:#00D4FF;letter-spacing:-0.02em;">Morning Tech Briefing</div>
             <div style="font-size:13px;color:#5A6A7E;margin-top:6px;">${dateLabel} · KST</div>
