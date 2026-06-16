@@ -89,7 +89,9 @@ export async function fetchNews() {
         tools: [{ google_search: {} }],
         generationConfig: {
           temperature: 0.3,
-          maxOutputTokens: 4096,
+          // 2.5-flash는 thinking에 ~2700토큰을 쓰므로 4096이면 JSON이 잘림(MAX_TOKENS).
+          // 8192로 올려 10개 항목이 온전히 출력되도록 함.
+          maxOutputTokens: 8192,
         },
       }),
     }
