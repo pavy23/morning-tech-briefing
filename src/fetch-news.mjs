@@ -68,33 +68,105 @@ function parseNewsJSON(raw) {
   return { items };
 }
 
-// 모델이 주는 url은 (1) Google 그라운딩 리다이렉트(만료되면 404) 또는
-// (2) 환각으로 만든 가짜 주소인 경우가 많다.
-// 수집 시점에 실제 기사 URL로 변환·검증해 영구적으로 살아있는 링크로 만든다.
-// 실패하면 헤드라인 기반 Google 검색 링크로 폴백(절대 죽지 않음).
-async function resolveLink(rawUrl, headline) {
-  const fallback = `https://www.google.com/search?q=${encodeURIComponent(headline || "")}`;
-  if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return fallback;
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+// 헤드라인으로 Google 뉴스 검색 (해당 기사가 결과 맨 위에 뜸) — 절대 죽지 않는 폴백
+function newsSearchLink(headline) {
+  return `https://news.google.com/search?q=${encodeURIComponent(headline || "")}&hl=ko&gl=KR&ceid=KR:ko`;
+}
+
+// URL이 (톱/섹션 페이지가 아니라) 개별 기사로 보이는지 휴리스틱 판별
+function isLikelyArticle(u) {
   try {
-    const res = await fetch(rawUrl, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(8000),
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; MorningTechBriefing/1.0)" },
-    });
-    // 정상 응답이고 최종 주소가 리다이렉트 도메인이 아니면 그 실제 주소 사용
-    if (res.ok && !res.url.includes("vertexaisearch.cloud.google.com")) {
-      return res.url;
-    }
-    return fallback;
+    const { pathname } = new URL(u);
+    const segs = pathname.split("/").filter(Boolean);
+    if (segs.length === 0) return false; // 도메인 루트 = 톱페이지
+    const last = segs[segs.length - 1];
+    // 기사 신호: 숫자 ID(5자리+)/날짜 경로, 긴 제목 슬러그, 흔한 기사 경로 패턴
+    return (
+      /\d{5,}/.test(pathname) ||            // 기사 ID (섹션엔 잘 없는 긴 숫자)
+      /\d{4}\/\d{2}\/\d{2}/.test(pathname) || // /2026/06/15/ 날짜 경로
+      last.length >= 16 ||                  // 긴 제목-기반 슬러그
+      /(article|news\/view|story|read|post|entry|\/news\/.+\/)/i.test(pathname)
+    );
   } catch {
-    return fallback;
+    return false;
   }
 }
 
-async function resolveAllLinks(items) {
+// 모델은 vertex 리다이렉트 URL을 자주 잘라먹어(truncate) 죽은 링크로 만든다.
+// groundingChunks에는 잘리지 않은 정식 URL이 있으므로, 토큰 접두사 매칭으로 복원한다.
+function redirectToken(u) {
+  const m = String(u || "").match(/grounding-api-redirect\/([^?&#"]+)/);
+  return m ? m[1] : null;
+}
+function canonicalizeVertex(rawUrl, chunkUris) {
+  const rt = redirectToken(rawUrl);
+  if (!rt) return rawUrl;
+  let best = null, bestLen = 0;
+  for (const cu of chunkUris) {
+    const ct = redirectToken(cu);
+    if (!ct) continue;
+    const [shorter, longer] = rt.length < ct.length ? [rt, ct] : [ct, rt];
+    if (longer.startsWith(shorter) && shorter.length > bestLen) {
+      best = cu;
+      bestLen = shorter.length;
+    }
+  }
+  return best || rawUrl;
+}
+
+// 그라운딩 리다이렉트(vertexaisearch)에서 발행처의 실제 기사 URL을 추출.
+// manual로 Location 헤더(원 기사 URL)를 우선 사용 — 사이트의 봇-튕김(톱페이지로 redirect)을 회피.
+async function unwrapRedirect(url) {
+  try {
+    const r = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(8000) });
+    const loc = r.headers.get("location");
+    if (loc) return loc;
+  } catch {}
+  // Location이 없으면 끝까지 따라가서라도 최종 주소 확보
+  try {
+    const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(8000), headers: { "User-Agent": UA } });
+    if (r.ok && !r.url.includes("vertexaisearch.cloud.google.com")) return r.url;
+  } catch {}
+  return null;
+}
+
+// 모델이 직접 준 (그라운딩 아닌) URL이 실제로 살아있는지 확인 — 환각 404 방지
+async function isAlive(url) {
+  try {
+    const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(8000), headers: { "User-Agent": UA } });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+// 모델이 주는 url은 (1) Google 그라운딩 리다이렉트(만료되면 404, 톱페이지로 풀리기도 함)
+// 또는 (2) 환각으로 만든 가짜 주소인 경우가 많다.
+// → 수집 시점에 발행처의 실제 "기사" URL로 변환하고, 기사로 보이지 않으면
+//   헤드라인 Google 뉴스 검색 링크로 폴백한다(클릭 시 해당 기사가 맨 위에 노출).
+async function resolveLink(rawUrl, headline, chunkUris) {
+  if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return newsSearchLink(headline);
+
+  if (rawUrl.includes("vertexaisearch.cloud.google.com")) {
+    // 모델이 잘라먹은 URL을 정식 chunk URL로 복원한 뒤 발행처 기사 URL 추출
+    const canonical = canonicalizeVertex(rawUrl, chunkUris);
+    const real = await unwrapRedirect(canonical);
+    if (!real) return newsSearchLink(headline);
+    // 발행처 기사 URL이면 사용, 톱/섹션 페이지면 기사 검색으로 폴백
+    return isLikelyArticle(real) ? real : newsSearchLink(headline);
+  }
+
+  // 그라운딩이 아닌 모델 직접 URL: 기사 형태 + 실제 접속 가능할 때만 사용
+  if (isLikelyArticle(rawUrl) && (await isAlive(rawUrl))) return rawUrl;
+  return newsSearchLink(headline);
+}
+
+async function resolveAllLinks(items, chunkUris) {
   await Promise.all(
     items.map(async (it) => {
-      it.url = await resolveLink(it.url, it.headline);
+      it.url = await resolveLink(it.url, it.headline, chunkUris);
     })
   );
   return items;
@@ -159,8 +231,11 @@ export async function fetchNews() {
   const order = { high: 0, medium: 1 };
   parsed.items.sort((a, b) => (order[a.importance] ?? 1) - (order[b.importance] ?? 1));
 
-  // 링크를 실제 기사 URL로 변환·검증 (만료/404 방지)
-  await resolveAllLinks(parsed.items);
+  // 링크를 실제 기사 URL로 변환·검증 (만료/404/톱페이지 방지)
+  const chunkUris = (candidate.groundingMetadata?.groundingChunks || [])
+    .map((c) => c?.web?.uri)
+    .filter(Boolean);
+  await resolveAllLinks(parsed.items, chunkUris);
 
   return { items: parsed.items, fetchedAt: new Date() };
 }

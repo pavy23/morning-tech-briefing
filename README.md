@@ -30,16 +30,16 @@
 
 ### 2단계 · GitHub 저장소 생성
 
-1. https://github.com/new 에서 새 저장소 생성 (예: `morning-signal-mailer`, **Private 권장**)
+1. https://github.com/new 에서 새 저장소 생성 (예: `morning-tech-briefing`, **Private 권장**)
 2. 이 폴더의 모든 파일을 저장소에 푸시:
 
 ```bash
-cd morning-signal-mailer
+cd morning-tech-briefing
 git init
 git add .
 git commit -m "Initial commit: Morning Tech Briefing Mailer"
 git branch -M main
-git remote add origin https://github.com/<본인계정>/morning-signal-mailer.git
+git remote add origin https://github.com/<본인계정>/morning-tech-briefing.git
 git push -u origin main
 ```
 
@@ -81,9 +81,21 @@ GitHub Actions 자동 트리거 (.github/workflows/daily.yml)
 src/index.mjs 실행
         │
         ├─ fetch-news.mjs   → Gemini API + Google 검색으로 뉴스 10개 수집
+        │                     + 각 뉴스 링크를 실제 기사 URL로 변환·검증
         ├─ email-template.mjs → 웹 카드 디자인 HTML 생성
         └─ send-email.mjs   → Resend로 pavy2004@gmail.com 발송
 ```
+
+### 🔗 뉴스 링크 처리
+
+Gemini가 주는 원문 URL은 Google 그라운딩 리다이렉트(시간이 지나면 만료→404)이거나
+모델이 만든 가짜 주소일 수 있습니다. 그래서 `fetch-news.mjs`는 **수집 시점에**:
+
+1. 잘린 리다이렉트 URL을 `groundingChunks`의 정식 URL과 매칭해 복원
+2. 발행처의 **실제 기사 URL**로 변환 (만료 없는 영구 링크)
+3. 톱페이지·섹션·죽은 링크면 **헤드라인 Google 뉴스 검색 링크로 폴백** (해당 기사가 결과 맨 위)
+
+→ 메일의 "🔗 원문 보기"는 항상 살아있는 링크이며, 대부분 기사 본문으로 바로 연결됩니다.
 
 ---
 
@@ -129,6 +141,20 @@ npm start
 
 ---
 
+## 🖼 (참고) 발신자 프로필 사진(아바타)
+
+Gmail에서 발신자 이름 옆 동그란 로고는 **BIMI** 표준으로 표시되며, 다음이 모두 필요합니다:
+
+- 본인 소유 도메인 (공용 `onboarding@resend.dev`로는 **불가**)
+- SPF + DKIM + **DMARC 강제(`p=quarantine` 이상)**
+- 정사각형 SVG 로고 호스팅
+- **Gmail은 추가로 VMC 인증서**(연 $1,000+)까지 요구
+
+→ **Resend에 이미지를 올린다고 해결되지 않습니다.** 개인용 브리핑에선 비용 대비 효율이 낮아
+빈 아바타로 두는 것을 권장합니다(기능엔 전혀 영향 없음).
+
+---
+
 ## 💰 비용 — 완전 무료
 
 | 항목 | 비용 |
@@ -140,9 +166,13 @@ npm start
 > 하루 1회 발송 기준 **세 가지 모두 무료 한도 안에서 운영**됩니다. 신용카드 등록도 필요 없습니다.
 
 **모델 선택** (무료 한도는 모델별로 다름)
-- `gemini-2.5-flash` (기본) — 균형 잡힌 품질
-- `gemini-2.5-flash-lite` — 더 빠르고 무료 RPD(일일 요청) 한도 넉넉
-- `gemini-3.5-flash` — 최신 고성능 (무료 등급 월 5,000 grounded 프롬프트)
+- `gemini-2.5-flash` (기본·권장) — 균형 잡힌 품질, 그라운딩 안정적
+- `gemini-2.5-flash-lite` — 더 빠르고 무료 RPD(일일 요청) 한도 넉넉, 10개 수집도 정상
+- `gemini-3.5-flash` — 최신 고성능. ⚠️ **키 종류에 따라 무료 grounded 할당량이 0이라 429가 날 수 있음** — 429가 나면 `2.5-flash`로 돌리세요.
+
+> 참고: 2.5-flash는 응답 전 thinking에 ~2,700토큰을 쓰므로 `src/fetch-news.mjs`의
+> `maxOutputTokens`가 너무 낮으면(예: 4096) JSON이 잘려 뉴스가 1~2개만 나옵니다.
+> 현재 **8192**로 설정되어 10개가 온전히 수집됩니다.
 
 ---
 
@@ -160,11 +190,18 @@ npm start
 **"GEMINI_API_KEY 환경변수가 없습니다"**
 - 3단계 Secrets 등록을 빠뜨렸거나 이름 오타. 대소문자 정확히 일치해야 함
 
-**"Gemini API 429" (rate limit)**
-- 무료 등급 분당 요청 한도 초과. 하루 1회 자동 실행에선 거의 발생 안 하지만, 테스트를 연속으로 여러 번 돌리면 잠시 후 재시도
+**"Gemini API 429" (quota/rate limit)**
+- 분당 요청 한도 초과면 잠시 후 재시도 (자동 재시도 3회 내장)
+- `gemini-3.5-flash`로 바꾼 뒤 계속 429라면, 그 키엔 해당 모델의 무료 grounded 할당량이 없는 것 → `MODEL`을 `gemini-2.5-flash`로 변경
+
+**"Gemini API 503"**
+- Gemini 서버 일시 과부하(transient). 자동 재시도가 흡수하며, 안 되면 잠시 후 수동 재실행
+
+**뉴스가 1~2개만 옴**
+- `maxOutputTokens`가 낮아 JSON이 잘린 경우. `src/fetch-news.mjs`에서 8192 이상인지 확인
 
 **JSON 파싱 오류**
-- 코드에 잘린 JSON 복구 로직이 있어 대부분 자동 처리됨. 계속 실패하면 `gemini-3.5-flash` 모델로 변경 권장
+- 코드에 잘린 JSON 복구 로직이 있어 대부분 자동 처리됨. 계속 실패하면 `maxOutputTokens`를 더 올리거나 모델 변경
 
 ---
 
@@ -181,7 +218,7 @@ Claude Code가 `git`, `gh secret set`, `gh workflow run` 명령을 순서대로 
 ## 📂 구조
 
 ```
-morning-signal-mailer/
+morning-tech-briefing/
 ├── .github/workflows/daily.yml   # 매일 8시 KST cron
 ├── src/
 │   ├── index.mjs                 # 메인 엔트리
