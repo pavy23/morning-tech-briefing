@@ -1,0 +1,31 @@
+name: Daily Morning Signal
+
+on:
+  schedule:
+    # 매일 23:00 UTC = 다음날 08:00 KST (KST = UTC+9)
+    - cron: "0 23 * * *"
+  # 수동 실행 버튼 (테스트용)
+  workflow_dispatch:
+
+jobs:
+  send-briefing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Send daily briefing email
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          MODEL: ${{ vars.MODEL }}
+        run: node src/index.mjs

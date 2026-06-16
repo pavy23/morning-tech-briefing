@@ -1,0 +1,14 @@
+{
+  "name": "morning-signal-mailer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "매일 오전 8시 KST에 AI/XR/우주/로봇 뉴스를 이메일로 발송",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "test:local": "node src/index.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
