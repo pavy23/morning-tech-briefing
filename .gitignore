@@ -1,0 +1,7 @@
+node_modules/
+.claude/
+.env
+.env.local
+*.log
+.DS_Store
+preview.html
