@@ -68,6 +68,38 @@ function parseNewsJSON(raw) {
   return { items };
 }
 
+// 모델이 주는 url은 (1) Google 그라운딩 리다이렉트(만료되면 404) 또는
+// (2) 환각으로 만든 가짜 주소인 경우가 많다.
+// 수집 시점에 실제 기사 URL로 변환·검증해 영구적으로 살아있는 링크로 만든다.
+// 실패하면 헤드라인 기반 Google 검색 링크로 폴백(절대 죽지 않음).
+async function resolveLink(rawUrl, headline) {
+  const fallback = `https://www.google.com/search?q=${encodeURIComponent(headline || "")}`;
+  if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return fallback;
+  try {
+    const res = await fetch(rawUrl, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(8000),
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; MorningTechBriefing/1.0)" },
+    });
+    // 정상 응답이고 최종 주소가 리다이렉트 도메인이 아니면 그 실제 주소 사용
+    if (res.ok && !res.url.includes("vertexaisearch.cloud.google.com")) {
+      return res.url;
+    }
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function resolveAllLinks(items) {
+  await Promise.all(
+    items.map(async (it) => {
+      it.url = await resolveLink(it.url, it.headline);
+    })
+  );
+  return items;
+}
+
 export async function fetchNews() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY 환경변수가 없습니다");
@@ -126,6 +158,9 @@ export async function fetchNews() {
   // importance 순 정렬
   const order = { high: 0, medium: 1 };
   parsed.items.sort((a, b) => (order[a.importance] ?? 1) - (order[b.importance] ?? 1));
+
+  // 링크를 실제 기사 URL로 변환·검증 (만료/404 방지)
+  await resolveAllLinks(parsed.items);
 
   return { items: parsed.items, fetchedAt: new Date() };
 }
