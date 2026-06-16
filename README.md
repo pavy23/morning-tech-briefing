@@ -1,4 +1,4 @@
-# Morning Signal Mailer 📡
+# Morning Tech Briefing 📡
 
 매일 **오전 8시(KST)**에 AI · XR · 우주 · 로봇 분야 글로벌 주요 뉴스 10개를 수집해 이메일로 발송합니다. 웹앱과 동일한 카드 디자인의 HTML 메일을 받아볼 수 있습니다.
 
@@ -37,7 +37,7 @@
 cd morning-signal-mailer
 git init
 git add .
-git commit -m "Initial commit: Morning Signal Mailer"
+git commit -m "Initial commit: Morning Tech Briefing Mailer"
 git branch -M main
 git remote add origin https://github.com/<본인계정>/morning-signal-mailer.git
 git push -u origin main
@@ -54,14 +54,14 @@ git push -u origin main
 | `GEMINI_API_KEY` | `AIzaSy...` (1단계 ①) |
 | `RESEND_API_KEY` | `re_...` (1단계 ②) |
 | `TO_EMAIL` | `pavy2004@gmail.com` |
-| `FROM_EMAIL` | `Morning Signal <onboarding@resend.dev>` |
+| `FROM_EMAIL` | `Morning Tech Briefing <onboarding@resend.dev>` |
 
 > (선택) 모델을 바꾸려면 **Variables** 탭에서 `MODEL` 등록 (예: `gemini-2.5-flash-lite` — 더 빠르고 무료 한도 넉넉)
 
 ### 4단계 · 테스트 실행
 
 1. 저장소의 **Actions** 탭 클릭
-2. 좌측 "Daily Morning Signal" 워크플로 선택
+2. 좌측 "Daily Morning Tech Briefing" 워크플로 선택
 3. 우측 **"Run workflow"** 버튼 클릭 → 실행
 4. 1~2분 후 로그 확인, pavy2004@gmail.com 메일함 확인
 
@@ -123,7 +123,7 @@ npm start
 
 1. https://resend.com/domains → "Add Domain"
 2. 안내된 DNS 레코드(SPF, DKIM)를 도메인 관리 페이지에 추가
-3. 인증 완료 후 `FROM_EMAIL` Secret을 `Morning Signal <noreply@yourdomain.com>`로 변경
+3. 인증 완료 후 `FROM_EMAIL` Secret을 `Morning Tech Briefing <noreply@yourdomain.com>`로 변경
 
 도메인 인증을 하면 **임의의 수신자**에게도 발송 가능하고, 스팸함에 덜 들어갑니다.
 
