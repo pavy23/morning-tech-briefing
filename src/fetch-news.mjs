@@ -172,10 +172,14 @@ async function resolveAllLinks(items, chunkUris) {
   return items;
 }
 
-export async function fetchNews() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY 환경변수가 없습니다");
+// 이 개수 미만이면 응답이 잘린 것(MAX_TOKENS)으로 보고 재시도
+const MIN_ITEMS = 5;
+// 항목 수 부족 또는 일시 오류(503 등) 시 최대 재시도 횟수
+const MAX_FETCH_ATTEMPTS = 3;
 
+// Gemini API 호출 + JSON 파싱만 담당 (링크 변환 제외).
+// { items, chunkUris, finishReason } 반환. 실패 시 throw.
+async function fetchRawItems(apiKey) {
   const todayKst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
 
   const res = await fetch(
@@ -193,9 +197,10 @@ export async function fetchNews() {
         tools: [{ google_search: {} }],
         generationConfig: {
           temperature: 0.3,
-          // 2.5-flash는 thinking에 ~2700토큰을 쓰므로 4096이면 JSON이 잘림(MAX_TOKENS).
-          // 8192로 올려 10개 항목이 온전히 출력되도록 함.
-          maxOutputTokens: 8192,
+          // 2.5-flash는 thinking에 ~2700토큰을 쓰므로 8192면 그날 thinking/요약이
+          // 길 때 JSON이 잘림(MAX_TOKENS) → 항목 1~2개만 복구됨.
+          // 16384로 올려 10개 항목이 온전히 출력될 여유를 확보.
+          maxOutputTokens: 16384,
         },
       }),
     }
@@ -227,15 +232,51 @@ export async function fetchNews() {
     throw new Error("뉴스 항목을 가져오지 못했습니다");
   }
 
-  // importance 순 정렬
-  const order = { high: 0, medium: 1 };
-  parsed.items.sort((a, b) => (order[a.importance] ?? 1) - (order[b.importance] ?? 1));
-
-  // 링크를 실제 기사 URL로 변환·검증 (만료/404/톱페이지 방지)
   const chunkUris = (candidate.groundingMetadata?.groundingChunks || [])
     .map((c) => c?.web?.uri)
     .filter(Boolean);
-  await resolveAllLinks(parsed.items, chunkUris);
 
-  return { items: parsed.items, fetchedAt: new Date() };
+  return { items: parsed.items, chunkUris, finishReason: candidate.finishReason || "unknown" };
+}
+
+export async function fetchNews() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY 환경변수가 없습니다");
+
+  // 항목이 너무 적으면(잘림) 재시도하며, 가장 많이 수집된 결과를 보관한다.
+  // index.mjs의 withRetry는 "에러"일 때만 재시도하므로, "1개만 성공" 케이스는
+  // 여기서 개수 기준으로 직접 잡아야 한다.
+  let best = null;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
+    try {
+      const r = await fetchRawItems(apiKey);
+      if (!best || r.items.length > best.items.length) best = r;
+      if (r.items.length >= MIN_ITEMS) break; // 충분히 모이면 종료
+      console.error(
+        `[fetch-news] ${r.items.length}개만 수집됨(finishReason: ${r.finishReason}). ` +
+        `재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}`
+      );
+    } catch (e) {
+      lastErr = e;
+      console.error(`[fetch-news] 호출 실패: ${e.message} (재시도 ${attempt}/${MAX_FETCH_ATTEMPTS})`);
+    }
+    if (attempt < MAX_FETCH_ATTEMPTS) {
+      await new Promise((r) => setTimeout(r, attempt * 4000));
+    }
+  }
+
+  if (!best) throw lastErr || new Error("뉴스 수집에 실패했습니다");
+  if (best.items.length < MIN_ITEMS) {
+    console.error(`[fetch-news] 재시도 후에도 ${best.items.length}개만 확보. 그대로 발송합니다.`);
+  }
+
+  // importance 순 정렬
+  const order = { high: 0, medium: 1 };
+  best.items.sort((a, b) => (order[a.importance] ?? 1) - (order[b.importance] ?? 1));
+
+  // 링크를 실제 기사 URL로 변환·검증 (만료/404/톱페이지 방지)
+  await resolveAllLinks(best.items, best.chunkUris);
+
+  return { items: best.items, fetchedAt: new Date() };
 }
