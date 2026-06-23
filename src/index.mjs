@@ -4,6 +4,7 @@
 import { fetchNews } from "./fetch-news.mjs";
 import { buildEmailHTML, buildEmailText, buildSubject } from "./email-template.mjs";
 import { sendEmail } from "./send-email.mjs";
+import { randomUUID } from "node:crypto";
 
 const TO_EMAIL = process.env.TO_EMAIL || "pavy2004@gmail.com";
 // Resend는 도메인 인증 전까지 onboarding@resend.dev 발신만 허용
@@ -53,8 +54,17 @@ async function main() {
 
   // 3. 발송 (자체 재시도가 없으므로 일시 실패 대비 withRetry로 감쌈)
   console.log("발송 중...");
+  // 같은 실행에서 재시도할 때 동일한 키를 사용해 중복 발송을 막는다.
+  const idempotencyKey = `morning-tech-briefing/${randomUUID()}`;
   const result = await withRetry(
-    () => sendEmail({ to: TO_EMAIL, from: FROM_EMAIL, subject, html, text }),
+    () => sendEmail({
+      to: TO_EMAIL,
+      from: FROM_EMAIL,
+      subject,
+      html,
+      text,
+      idempotencyKey,
+    }),
     "send-email"
   );
   console.log(`✓ 발송 완료 (id: ${result.id})`);
