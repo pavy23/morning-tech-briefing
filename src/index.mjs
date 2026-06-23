@@ -9,7 +9,9 @@ const TO_EMAIL = process.env.TO_EMAIL || "pavy2004@gmail.com";
 // Resend는 도메인 인증 전까지 onboarding@resend.dev 발신만 허용
 const FROM_EMAIL = process.env.FROM_EMAIL || "Morning Tech Briefing <onboarding@resend.dev>";
 
-// 재시도 래퍼 (뉴스 수집이 일시적으로 실패할 수 있어 최대 2회 재시도)
+// 일시 실패용 재시도 래퍼.
+// 주의: fetchNews는 내부에 자체 재시도(백오프+모델 폴백)가 있으므로 여기서 감싸지 않는다
+// (이중 재시도 → 호출 폭주 → 오히려 429 유발). 자체 재시도가 없는 발송 단계에만 사용.
 async function withRetry(fn, label, maxAttempts = 3) {
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -34,9 +36,9 @@ async function main() {
   console.log(`시각(KST): ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}`);
   console.log("");
 
-  // 1. 뉴스 수집
+  // 1. 뉴스 수집 (fetchNews 내부에 자체 재시도+폴백이 있어 추가 래핑 불필요)
   console.log("📡 뉴스 수집 중...");
-  const news = await withRetry(fetchNews, "fetch-news");
+  const news = await fetchNews();
   console.log(`✓ ${news.items.length}개 뉴스 수집 완료`);
   news.items.forEach((it, i) => {
     console.log(`  ${String(i + 1).padStart(2, "0")}. [${it.category}] ${it.headline}`);
@@ -49,15 +51,12 @@ async function main() {
   const subject = buildSubject(news);
   console.log(`📧 제목: ${subject}`);
 
-  // 3. 발송
+  // 3. 발송 (자체 재시도가 없으므로 일시 실패 대비 withRetry로 감쌈)
   console.log("발송 중...");
-  const result = await sendEmail({
-    to: TO_EMAIL,
-    from: FROM_EMAIL,
-    subject,
-    html,
-    text,
-  });
+  const result = await withRetry(
+    () => sendEmail({ to: TO_EMAIL, from: FROM_EMAIL, subject, html, text }),
+    "send-email"
+  );
   console.log(`✓ 발송 완료 (id: ${result.id})`);
 }
 
