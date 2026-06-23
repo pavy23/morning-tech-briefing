@@ -57,6 +57,8 @@ git push -u origin main
 | `FROM_EMAIL` | `Morning Tech Briefing <onboarding@resend.dev>` |
 
 > (선택) 모델을 바꾸려면 **Variables** 탭에서 `MODEL` 등록 (예: `gemini-2.5-flash-lite` — 더 빠르고 무료 한도 넉넉)
+>
+> (선택) 기본 모델이 일시 오류로 막힐 때 쓰는 백업 모델을 바꾸려면 **Variables** 탭에서 `FALLBACK_MODEL` 등록. 등록하지 않으면 기본값 `gemini-2.5-flash-lite`가 사용되고, `MODEL`과 같은 값으로 두면 폴백이 비활성화됩니다.
 
 ### 4단계 · 테스트 실행
 

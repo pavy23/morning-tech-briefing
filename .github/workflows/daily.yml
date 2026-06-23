@@ -28,4 +28,5 @@ jobs:
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           MODEL: ${{ vars.MODEL }}
+          FALLBACK_MODEL: ${{ vars.FALLBACK_MODEL }}
         run: node src/index.mjs
