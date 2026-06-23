@@ -2,6 +2,9 @@
 // Gemini API + Google Search grounding으로 AI/XR/우주/로봇 뉴스 10개를 수집
 
 const MODEL = process.env.MODEL || "gemini-2.5-flash";
+// 기본 모델이 503/429 같은 일시적 과부하로 거듭 실패할 때 쓸 백업 모델.
+// (그라운딩 품질은 다소 낮아도 "메일 누락"보다는 낫다. 같은 모델이면 폴백 비활성.)
+const FALLBACK_MODEL = process.env.FALLBACK_MODEL || "gemini-2.5-flash-lite";
 
 const PROMPT = `당신은 글로벌 테크 뉴스 에디터입니다.
 Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 AI, XR(AR/VR/MR), 우주산업, 로봇산업 분야 가장 중요한 글로벌 주요 뉴스를 찾아 아래 JSON 형식으로만 응답하세요.
@@ -175,15 +178,30 @@ async function resolveAllLinks(items, chunkUris) {
 // 이 개수 미만이면 응답이 잘린 것(MAX_TOKENS)으로 보고 재시도
 const MIN_ITEMS = 5;
 // 항목 수 부족 또는 일시 오류(503 등) 시 최대 재시도 횟수
-const MAX_FETCH_ATTEMPTS = 3;
+const MAX_FETCH_ATTEMPTS = 5;
+// 기본 모델에서 일시 오류가 이 횟수만큼 누적되면 백업 모델로 전환
+const FALLBACK_AFTER = 2;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 재시도하면 풀릴 가능성이 있는 일시적 서버 오류(429 rate limit, 5xx 과부하)인지 판별
+function isTransient(err) {
+  return /\b(429|500|502|503|504)\b/.test(String(err?.message || ""));
+}
+
+// 지수 백오프 + 지터: 2s, 4s, 8s, 16s ... (상한 20s, ±25% 흔들기로 동시 재시도 분산)
+function backoffMs(attempt) {
+  const base = Math.min(2000 * 2 ** (attempt - 1), 20000);
+  return Math.round(base * (0.75 + Math.random() * 0.5));
+}
 
 // Gemini API 호출 + JSON 파싱만 담당 (링크 변환 제외).
 // { items, chunkUris, finishReason } 반환. 실패 시 throw.
-async function fetchRawItems(apiKey) {
+async function fetchRawItems(apiKey, model = MODEL) {
   const todayKst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: "POST",
       headers: {
@@ -248,21 +266,29 @@ export async function fetchNews() {
   // 여기서 개수 기준으로 직접 잡아야 한다.
   let best = null;
   let lastErr = null;
+  let transientFails = 0; // 기본 모델의 누적 일시 오류 수
   for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
+    // 기본 모델이 일시 오류로 거듭 막히면 백업 모델로 전환해 발송 누락을 막는다.
+    const useFallback =
+      transientFails >= FALLBACK_AFTER && FALLBACK_MODEL && FALLBACK_MODEL !== MODEL;
+    const model = useFallback ? FALLBACK_MODEL : MODEL;
     try {
-      const r = await fetchRawItems(apiKey);
+      const r = await fetchRawItems(apiKey, model);
       if (!best || r.items.length > best.items.length) best = r;
       if (r.items.length >= MIN_ITEMS) break; // 충분히 모이면 종료
       console.error(
-        `[fetch-news] ${r.items.length}개만 수집됨(finishReason: ${r.finishReason}). ` +
+        `[fetch-news] ${model}: ${r.items.length}개만 수집됨(finishReason: ${r.finishReason}). ` +
         `재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}`
       );
     } catch (e) {
       lastErr = e;
-      console.error(`[fetch-news] 호출 실패: ${e.message} (재시도 ${attempt}/${MAX_FETCH_ATTEMPTS})`);
+      if (isTransient(e) && !useFallback) transientFails++;
+      console.error(
+        `[fetch-news] ${model} 호출 실패: ${e.message} (재시도 ${attempt}/${MAX_FETCH_ATTEMPTS})`
+      );
     }
     if (attempt < MAX_FETCH_ATTEMPTS) {
-      await new Promise((r) => setTimeout(r, attempt * 4000));
+      await sleep(backoffMs(attempt));
     }
   }
 
