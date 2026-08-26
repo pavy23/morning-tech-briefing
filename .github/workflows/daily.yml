@@ -2,8 +2,8 @@ name: Daily Morning Tech Briefing
 
 on:
   schedule:
-    # 매일 23:01 UTC = 다음날 08:01 KST (KST = UTC+9)
-    - cron: "1 23 * * *"
+    # 매일 23:00 UTC = 다음날 08:00 KST (KST = UTC+9)
+    - cron: "0 23 * * *"
   # 수동 실행 버튼 (테스트용)
   workflow_dispatch:
 
