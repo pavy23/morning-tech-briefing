@@ -47,7 +47,7 @@ git push -u origin main
 
 저장소 페이지에서 **Settings → Secrets and variables → Actions → "New repository secret"**
 
-아래 4개를 각각 등록:
+아래 4개를 각각 등록 (5번째는 선택):
 
 | Name | Value |
 |------|-------|
@@ -55,6 +55,13 @@ git push -u origin main
 | `RESEND_API_KEY` | `re_...` (1단계 ②) |
 | `TO_EMAIL` | `you@example.com` |
 | `FROM_EMAIL` | `Morning Tech Briefing <onboarding@resend.dev>` |
+| `TYPESAFE_API_KEY` | (선택) `ts_...` — [TypeSafe](https://typesafe.ai) 키. 있으면 섀도 판정이 켜짐 (아래 🧪 절 참고) |
+
+> **공개 저장소로 전환해도 Secrets는 노출되지 않습니다.** Secrets는 저장소 파일이 아니라 GitHub가 암호화해
+> 보관하는 값이며, 워크플로우 실행 시에만 주입되고 로그에서는 `***`로 가려집니다. 단, 공개 저장소는
+> **Actions 로그와 아티팩트(섀도 리포트)가 누구에게나 보이므로** 뉴스 헤드라인·링크는 공개됩니다.
+> 코드에 기본값으로 박힌 수신 이메일(`src/index.mjs`)과 판정용 독자 프로필(`src/judge.mjs`)도
+> 공개 전에 일반화하거나 환경변수로 빼는 것을 권장합니다.
 
 > (선택) 모델을 바꾸려면 **Variables** 탭에서 `MODEL` 등록 (예: `gemini-2.5-flash-lite` — 더 빠르고 무료 한도 넉넉)
 >
