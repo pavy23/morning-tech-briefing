@@ -149,34 +149,57 @@ async function isAlive(url) {
 // 또는 (2) 환각으로 만든 가짜 주소인 경우가 많다.
 // → 수집 시점에 발행처의 실제 "기사" URL로 변환하고, 기사로 보이지 않으면
 //   헤드라인 Google 뉴스 검색 링크로 폴백한다(클릭 시 해당 기사가 맨 위에 노출).
+//
+// 반환: { url, status }
+//   status = "grounded" : 그라운딩 리다이렉트 → 발행처 실제 기사 URL로 복원됨
+//            "direct"   : 모델 직접 URL이 기사 형태이고 실제 접속됨
+//            "fallback" : 실패 → Google 뉴스 검색 링크
 async function resolveLink(rawUrl, headline, chunkUris) {
-  if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return newsSearchLink(headline);
+  const fallback = { url: newsSearchLink(headline), status: "fallback" };
+  if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return fallback;
 
   if (rawUrl.includes("vertexaisearch.cloud.google.com")) {
     // 모델이 잘라먹은 URL을 정식 chunk URL로 복원한 뒤 발행처 기사 URL 추출
     const canonical = canonicalizeVertex(rawUrl, chunkUris);
     const real = await unwrapRedirect(canonical);
-    if (!real) return newsSearchLink(headline);
+    if (!real) return fallback;
     // 발행처 기사 URL이면 사용, 톱/섹션 페이지면 기사 검색으로 폴백
-    return isLikelyArticle(real) ? real : newsSearchLink(headline);
+    return isLikelyArticle(real) ? { url: real, status: "grounded" } : fallback;
   }
 
   // 그라운딩이 아닌 모델 직접 URL: 기사 형태 + 실제 접속 가능할 때만 사용
-  if (isLikelyArticle(rawUrl) && (await isAlive(rawUrl))) return rawUrl;
-  return newsSearchLink(headline);
+  if (isLikelyArticle(rawUrl) && (await isAlive(rawUrl))) return { url: rawUrl, status: "direct" };
+  return fallback;
 }
 
+// 모든 항목의 링크를 변환하고, 각 항목에 linkStatus를 기록한 뒤 집계를 반환.
+// real = 실제 기사 URL로 확정된 항목 수(grounded + direct). 이 수가 낮으면
+// 그라운딩 없이(=환각으로) 생성된 배치일 가능성이 높다.
 async function resolveAllLinks(items, chunkUris) {
   await Promise.all(
     items.map(async (it) => {
-      it.url = await resolveLink(it.url, it.headline, chunkUris);
+      const { url, status } = await resolveLink(it.url, it.headline, chunkUris);
+      it.url = url;
+      it.linkStatus = status;
     })
   );
-  return items;
+  const count = (s) => items.filter((it) => it.linkStatus === s).length;
+  const grounded = count("grounded");
+  const direct = count("direct");
+  const fallback = count("fallback");
+  return { grounded, direct, fallback, real: grounded + direct, total: items.length };
 }
 
 // 이 개수 미만이면 응답이 잘린 것(MAX_TOKENS)으로 보고 재시도
 const MIN_ITEMS = 5;
+// 실제 기사 URL로 확정된 링크가 이 개수 미만이면 "그라운딩 누락 배치"로 보고 재시도.
+// 근거: 503 재시도 뒤 성공한 날(예: 2026-09-17)에 Google 검색 없이 모델 기억만으로
+// 만든 일반론·가짜 뉴스 10건이 그대로 발송된 사례가 있었다. 그런 배치는 URL이 전부
+// 환각이라 링크 검증에서 거의 0건만 살아남는다. 정상 배치는 보통 절반 이상 살아남는다.
+// 0으로 두면 가드를 끈다.
+const MIN_GROUNDED_LINKS = Number.isFinite(Number(process.env.MIN_GROUNDED_LINKS))
+  ? Number(process.env.MIN_GROUNDED_LINKS)
+  : 3;
 // 항목 수 부족 또는 일시 오류(503 등) 시 최대 재시도 횟수
 const MAX_FETCH_ATTEMPTS = 5;
 // 기본 모델에서 일시 오류가 이 횟수만큼 누적되면 백업 모델로 전환
@@ -261,9 +284,10 @@ export async function fetchNews() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY 환경변수가 없습니다");
 
-  // 항목이 너무 적으면(잘림) 재시도하며, 가장 많이 수집된 결과를 보관한다.
-  // index.mjs의 withRetry는 "에러"일 때만 재시도하므로, "1개만 성공" 케이스는
-  // 여기서 개수 기준으로 직접 잡아야 한다.
+  // 항목이 너무 적으면(잘림) 또는 실제 기사 링크가 너무 적으면(그라운딩 누락=환각 의심)
+  // 재시도하며, 가장 좋은 결과(실제 링크 수 → 항목 수 순)를 보관한다.
+  // index.mjs의 withRetry는 "에러"일 때만 재시도하므로, 이런 "성공했지만 나쁜" 케이스는
+  // 여기서 직접 잡아야 한다. 링크 변환은 시도마다 수행해 판정 근거로 쓴다.
   let best = null;
   let lastErr = null;
   let transientFails = 0; // 기본 모델의 누적 일시 오류 수
@@ -274,12 +298,33 @@ export async function fetchNews() {
     const model = useFallback ? FALLBACK_MODEL : MODEL;
     try {
       const r = await fetchRawItems(apiKey, model);
-      if (!best || r.items.length > best.items.length) best = r;
-      if (r.items.length >= MIN_ITEMS) break; // 충분히 모이면 종료
-      console.error(
-        `[fetch-news] ${model}: ${r.items.length}개만 수집됨(finishReason: ${r.finishReason}). ` +
-        `재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}`
+      // 링크를 실제 기사 URL로 변환·검증 (만료/404/톱페이지 방지) + 품질 집계
+      r.stats = await resolveAllLinks(r.items, r.chunkUris);
+      r.model = model;
+      console.log(
+        `[fetch-news] 시도 ${attempt}/${MAX_FETCH_ATTEMPTS} ${model}: ` +
+        `항목 ${r.items.length}개, 그라운딩 chunk ${r.chunkUris.length}개, ` +
+        `실제 기사 링크 ${r.stats.real}/${r.stats.total} ` +
+        `(리다이렉트 복원 ${r.stats.grounded}, 직접 URL ${r.stats.direct}, 검색 폴백 ${r.stats.fallback}), ` +
+        `finishReason: ${r.finishReason}`
       );
+      if (isBetter(r, best)) best = r;
+
+      const enoughItems = r.items.length >= MIN_ITEMS;
+      const grounded = r.stats.real >= MIN_GROUNDED_LINKS;
+      if (enoughItems && grounded) break; // 충분히 모이고 근거도 있으면 종료
+
+      if (!enoughItems) {
+        console.error(
+          `[fetch-news] ${model}: ${r.items.length}개만 수집됨(finishReason: ${r.finishReason}). ` +
+          `재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}`
+        );
+      } else {
+        console.error(
+          `[fetch-news] ${model}: 실제 기사 링크가 ${r.stats.real}개뿐(최소 ${MIN_GROUNDED_LINKS}개). ` +
+          `Google 검색 그라운딩 누락(환각 배치) 의심 → 재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}`
+        );
+      }
     } catch (e) {
       lastErr = e;
       if (isTransient(e) && !useFallback) transientFails++;
@@ -296,13 +341,23 @@ export async function fetchNews() {
   if (best.items.length < MIN_ITEMS) {
     console.error(`[fetch-news] 재시도 후에도 ${best.items.length}개만 확보. 그대로 발송합니다.`);
   }
+  if (best.stats.real < MIN_GROUNDED_LINKS) {
+    console.error(
+      `[fetch-news] 재시도 후에도 실제 기사 링크 ${best.stats.real}개뿐. ` +
+      `근거 불충분한 배치일 수 있으나 발송 누락보다는 낫다고 보고 그대로 발송합니다.`
+    );
+  }
 
   // importance 순 정렬
   const order = { high: 0, medium: 1 };
   best.items.sort((a, b) => (order[a.importance] ?? 1) - (order[b.importance] ?? 1));
 
-  // 링크를 실제 기사 URL로 변환·검증 (만료/404/톱페이지 방지)
-  await resolveAllLinks(best.items, best.chunkUris);
+  return { items: best.items, fetchedAt: new Date(), stats: best.stats, model: best.model };
+}
 
-  return { items: best.items, fetchedAt: new Date() };
+// 시도 결과 비교: 실제 기사 링크가 많은 쪽 → 같으면 항목이 많은 쪽
+function isBetter(r, best) {
+  if (!best) return true;
+  if (r.stats.real !== best.stats.real) return r.stats.real > best.stats.real;
+  return r.items.length > best.items.length;
 }
