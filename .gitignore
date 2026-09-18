@@ -6,3 +6,7 @@ node_modules/
 *.log
 .DS_Store
 preview.html
+
+# 섀도 판정 상태·리포트 (Actions 캐시/아티팩트로만 보관)
+.briefing-state/
+out/
