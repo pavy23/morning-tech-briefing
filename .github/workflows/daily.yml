@@ -54,8 +54,9 @@ jobs:
           SKIP_EMAIL: ${{ inputs.skip_email == true && '1' || '' }}
         run: node src/index.mjs
 
+      # skip_email 실행은 이력을 갱신하지 않으므로 저장할 것이 없다 (경고 방지)
       - name: Save briefing history
-        if: always()
+        if: always() && inputs.skip_email != true
         uses: actions/cache/save@v4
         with:
           path: .briefing-state
