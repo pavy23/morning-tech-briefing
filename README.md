@@ -25,7 +25,7 @@
 1. https://resend.com 가입 (GitHub 계정으로 가능)
 2. https://resend.com/api-keys → "Create API Key" → 키 복사 (`re_...`)
 3. **도메인 없이 바로 사용 가능**: 발신 주소 `onboarding@resend.dev` 기본 제공
-   - 단, 이 경우 **본인이 가입한 이메일로만** 발송 가능 (수신: you@example.com이 Resend 가입 이메일이어야 함)
+   - 단, 이 경우 **본인이 가입한 이메일로만** 발송 가능 (수신 주소 `TO_EMAIL`이 Resend 가입 이메일이어야 함)
    - 다른 주소로 보내려면 도메인 인증 필요 (선택, README 하단 참고)
 
 ### 2단계 · GitHub 저장소 생성
@@ -53,15 +53,15 @@ git push -u origin main
 |------|-------|
 | `GEMINI_API_KEY` | `AIzaSy...` (1단계 ①) |
 | `RESEND_API_KEY` | `re_...` (1단계 ②) |
-| `TO_EMAIL` | `you@example.com` |
+| `TO_EMAIL` | 수신 이메일 (필수 — 코드에 기본값 없음) |
 | `FROM_EMAIL` | `Morning Tech Briefing <onboarding@resend.dev>` |
 | `TYPESAFE_API_KEY` | (선택) `ts_...` — [TypeSafe](https://typesafe.ai) 키. 있으면 섀도 판정이 켜짐 (아래 🧪 절 참고) |
+| `READER_PROFILE` | (선택) 관련도 판정용 독자 프로필. JSON 한 줄, 예: `{"role":"...","strong_interests":["..."],"weak_interests":["..."]}`. 개인정보라 Secret으로 등록. 없으면 일반 프로필 |
 
 > **공개 저장소로 전환해도 Secrets는 노출되지 않습니다.** Secrets는 저장소 파일이 아니라 GitHub가 암호화해
 > 보관하는 값이며, 워크플로우 실행 시에만 주입되고 로그에서는 `***`로 가려집니다. 단, 공개 저장소는
 > **Actions 로그와 아티팩트(섀도 리포트)가 누구에게나 보이므로** 뉴스 헤드라인·링크는 공개됩니다.
-> 코드에 기본값으로 박힌 수신 이메일(`src/index.mjs`)과 판정용 독자 프로필(`src/judge.mjs`)도
-> 공개 전에 일반화하거나 환경변수로 빼는 것을 권장합니다.
+> 수신 이메일과 독자 프로필은 코드에 두지 않고 Secrets(`TO_EMAIL`, `READER_PROFILE`)에서만 읽습니다.
 
 > (선택) 모델을 바꾸려면 **Variables** 탭에서 `MODEL` 등록 (예: `gemini-2.5-flash-lite` — 더 빠르고 무료 한도 넉넉)
 >
@@ -72,7 +72,7 @@ git push -u origin main
 1. 저장소의 **Actions** 탭 클릭
 2. 좌측 "Daily Morning Tech Briefing" 워크플로 선택
 3. 우측 **"Run workflow"** 버튼 클릭 → 실행
-4. 1~2분 후 로그 확인, you@example.com 메일함 확인
+4. 1~2분 후 로그 확인, `TO_EMAIL` 메일함 확인
 
 ✅ 메일이 도착하면 완료! 이후 **매일 오전 8시 KST에 자동 발송**됩니다.
 
@@ -92,7 +92,7 @@ src/index.mjs 실행
         ├─ fetch-news.mjs   → Gemini API + Google 검색으로 뉴스 10개 수집
         │                     + 각 뉴스 링크를 실제 기사 URL로 변환·검증
         ├─ email-template.mjs → 웹 카드 디자인 HTML 생성
-        └─ send-email.mjs   → Resend로 you@example.com 발송
+        └─ send-email.mjs   → Resend로 TO_EMAIL 주소에 발송
 ```
 
 ### 🔗 뉴스 링크 처리
@@ -131,7 +131,7 @@ Jev는 텍스트를 생성하지 않고 정해진 형식의 판단(예/아니오
 |---|---|---|
 | 같은 날 중복 | 후보 쌍마다 "같은 사건인가" (Noul) | 9/14: 10건 중 3건이 같은 "AI 속도 조절론" |
 | 전날 재탕 | 최근 14일 헤드라인 대비 "이미 나온 사건인가" (Noul) | "AI 속도 조절론" 4일 연속, 메타 피닉스 3일 |
-| 독자 관련도 | 독자 프로필 기준 0~3 등급 (Score) | 9/13: "HD현대 조선용 로봇 손"이 10위 |
+| 독자 관련도 | `READER_PROFILE`의 역할·관심사 기준 0~3 등급 (Score) | 9/13: "HD현대 조선용 로봇 손"이 10위 |
 | 카테고리 재분류 | AI/XR/우주/로봇 택1 (Choice) | 9/18: "NASA 우주 기반 AI 메탄 매핑"이 AI로 분류 |
 
 동작 조건과 산출물:
@@ -148,7 +148,7 @@ Jev는 텍스트를 생성하지 않고 정해진 형식의 판단(예/아니오
 이 모드에서는 이력도 갱신하지 않습니다.
 
 **다음 단계**: 2주치 리포트를 보고 제안 순서가 실제 순서보다 나은지 확인되면, 20건 과수집 → Jev 판정 →
-코드 선별 10건 구조로 전환합니다. 판정 질문과 독자 프로필은 `src/judge.mjs`에 있습니다.
+코드 선별 10건 구조로 전환합니다. 판정 질문은 `src/judge.mjs`에, 독자 프로필은 Secret `READER_PROFILE`에 있습니다.
 
 ---
 
