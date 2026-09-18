@@ -4,11 +4,18 @@
 import { fetchNews } from "./fetch-news.mjs";
 import { buildEmailHTML, buildEmailText, buildSubject } from "./email-template.mjs";
 import { sendEmail } from "./send-email.mjs";
+import { isJudgeEnabled, runShadowJudgments, formatShadowReport } from "./judge.mjs";
+import { loadHistory, appendHistory, previousHeadlines, todayKst } from "./history.mjs";
 import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
 
 const TO_EMAIL = process.env.TO_EMAIL || "you@example.com";
 // Resend는 도메인 인증 전까지 onboarding@resend.dev 발신만 허용
 const FROM_EMAIL = process.env.FROM_EMAIL || "Morning Tech Briefing <onboarding@resend.dev>";
+// 테스트용: "1"이면 수집·판정만 하고 메일은 보내지 않는다 (이력도 갱신하지 않음)
+const SKIP_EMAIL = process.env.SKIP_EMAIL === "1" || process.env.SKIP_EMAIL === "true";
+// 섀도 판정 리포트 저장 폴더 (Actions 아티팩트로 업로드)
+const OUT_DIR = process.env.OUT_DIR || "out";
 
 // 일시 실패용 재시도 래퍼.
 // 주의: fetchNews는 내부에 자체 재시도(백오프+모델 폴백)가 있으므로 여기서 감싸지 않는다
@@ -53,13 +60,39 @@ async function main() {
   });
   console.log("");
 
-  // 2. 이메일 구성
+  // 2. TypeSafe(Jev) 섀도 판정 — 메일 내용은 바꾸지 않고 리포트만 남긴다.
+  //    실패해도 발송에는 영향이 없어야 하므로 통째로 감싼다.
+  const today = todayKst();
+  const history = await loadHistory();
+  if (isJudgeEnabled()) {
+    console.log("🧪 TypeSafe 섀도 판정 중...");
+    try {
+      const report = await runShadowJudgments(news.items, previousHeadlines(history, today));
+      console.log(formatShadowReport(report));
+      await mkdir(OUT_DIR, { recursive: true });
+      const file = `${OUT_DIR}/shadow-${today}.json`;
+      await writeFile(file, JSON.stringify({ date: today, ...report }, null, 2));
+      console.log(`[shadow] 리포트 저장: ${file}`);
+    } catch (e) {
+      console.error(`[shadow] 판정 실패 (메일 발송에는 영향 없음): ${e.message}`);
+    }
+  } else {
+    console.log("[shadow] TYPESAFE_API_KEY 없음 → 섀도 판정 생략");
+  }
+  console.log("");
+
+  // 3. 이메일 구성
   const html = buildEmailHTML(news);
   const text = buildEmailText(news);
   const subject = buildSubject(news);
   console.log(`📧 제목: ${subject}`);
 
-  // 3. 발송 (자체 재시도가 없으므로 일시 실패 대비 withRetry로 감쌈)
+  if (SKIP_EMAIL) {
+    console.log("SKIP_EMAIL 설정 → 발송과 이력 갱신을 생략합니다.");
+    return;
+  }
+
+  // 4. 발송 (자체 재시도가 없으므로 일시 실패 대비 withRetry로 감쌈)
   console.log("발송 중...");
   // 같은 실행에서 재시도할 때 동일한 키를 사용해 중복 발송을 막는다.
   const idempotencyKey = `morning-tech-briefing/${randomUUID()}`;
@@ -75,6 +108,14 @@ async function main() {
     "send-email"
   );
   console.log(`✓ 발송 완료 (id: ${result.id})`);
+
+  // 5. 발송한 헤드라인을 이력에 기록 (다음 날 재탕 판정의 근거)
+  try {
+    const days = await appendHistory(history, today, news.items);
+    console.log(`[history] ${today} 기록 완료 (보관 ${days.length}일)`);
+  } catch (e) {
+    console.error(`[history] 기록 실패: ${e.message}`);
+  }
 }
 
 main().catch((e) => {
