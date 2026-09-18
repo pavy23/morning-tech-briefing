@@ -40,9 +40,16 @@ async function main() {
   // 1. 뉴스 수집 (fetchNews 내부에 자체 재시도+폴백이 있어 추가 래핑 불필요)
   console.log("📡 뉴스 수집 중...");
   const news = await fetchNews();
-  console.log(`✓ ${news.items.length}개 뉴스 수집 완료`);
+  console.log(
+    `✓ ${news.items.length}개 뉴스 수집 완료 (모델: ${news.model}, ` +
+    `실제 기사 링크 ${news.stats.real}/${news.stats.total}, 검색 폴백 ${news.stats.fallback})`
+  );
+  // 링크 상태를 함께 남겨 두면 나중에 "정상일 때 보통 몇 개가 살아남는지" 기준을 잡을 수 있다.
+  const LINK_TAG = { grounded: "", direct: " (직접URL)", fallback: " ⚠️검색폴백" };
   news.items.forEach((it, i) => {
-    console.log(`  ${String(i + 1).padStart(2, "0")}. [${it.category}] ${it.headline}`);
+    console.log(
+      `  ${String(i + 1).padStart(2, "0")}. [${it.category}] ${it.headline}${LINK_TAG[it.linkStatus] ?? ""}`
+    );
   });
   console.log("");
 

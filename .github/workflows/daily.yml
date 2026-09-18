@@ -10,7 +10,8 @@ on:
 jobs:
   send-briefing:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 시도마다 링크 검증(최대 ~16초)이 붙고, 최대 5회 재시도 + 백오프까지 감안
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -29,4 +30,5 @@ jobs:
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           MODEL: ${{ vars.MODEL }}
           FALLBACK_MODEL: ${{ vars.FALLBACK_MODEL }}
+          MIN_GROUNDED_LINKS: ${{ vars.MIN_GROUNDED_LINKS }}
         run: node src/index.mjs
