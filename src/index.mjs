@@ -9,7 +9,8 @@ import { loadHistory, appendHistory, previousHeadlines, todayKst } from "./histo
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 
-const TO_EMAIL = process.env.TO_EMAIL || "you@example.com";
+// 수신 주소는 코드에 두지 않는다 (공개 저장소 대비). Secrets의 TO_EMAIL 필수.
+const TO_EMAIL = process.env.TO_EMAIL;
 // Resend는 도메인 인증 전까지 onboarding@resend.dev 발신만 허용
 const FROM_EMAIL = process.env.FROM_EMAIL || "Morning Tech Briefing <onboarding@resend.dev>";
 // 테스트용: "1"이면 수집·판정만 하고 메일은 보내지 않는다 (이력도 갱신하지 않음)
@@ -40,7 +41,7 @@ async function withRetry(fn, label, maxAttempts = 3) {
 
 async function main() {
   console.log("=== Morning Tech Briefing ===");
-  console.log(`수신자: ${TO_EMAIL}`);
+  console.log(`수신자: ${TO_EMAIL || "(미설정)"}`);
   console.log(`시각(KST): ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}`);
   console.log("");
 
@@ -93,6 +94,7 @@ async function main() {
   }
 
   // 4. 발송 (자체 재시도가 없으므로 일시 실패 대비 withRetry로 감쌈)
+  if (!TO_EMAIL) throw new Error("TO_EMAIL 환경변수가 없습니다 (GitHub Secrets에 수신 주소를 등록하세요)");
   console.log("발송 중...");
   // 같은 실행에서 재시도할 때 동일한 키를 사용해 중복 발송을 막는다.
   const idempotencyKey = `morning-tech-briefing/${randomUUID()}`;

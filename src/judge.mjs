@@ -26,17 +26,33 @@ export const REPEAT_THRESHOLD = Number(process.env.REPEAT_THRESHOLD || 0.7);
 
 const CATEGORIES = ["AI", "XR", "우주", "로봇"];
 
-const READER_PROFILE = {
+// 독자 프로필은 개인정보라 코드에 두지 않는다. 환경변수 READER_PROFILE(Secrets 권장)에
+// JSON 한 줄 또는 자유 텍스트로 넣는다. 없으면 아래 일반 프로필로 판정한다.
+// 예) {"role":"...","strong_interests":["..."],"weak_interests":["..."]}
+const DEFAULT_READER_PROFILE = {
   role: "A professional who follows global technology news",
-  education: "(redacted)",
   briefing_purpose: "Daily global tech news in AI, XR, space industry, and robotics",
   strong_interests: [
-    "industrial applications",
-    "physical AI, industrial robots, humanoids in factories, automation of manufacturing",
-    "technology strategy, corporate R&D, industry policy, and major investments or deals",
+    "major model, product, and platform launches",
+    "large investments, deals, and policy decisions that shape the industry",
+    "technology strategy and industrial applications",
   ],
   weak_interests: ["consumer gadget rumors", "entertainment or gaming-only news", "minor product updates"],
 };
+
+export function loadReaderProfile(raw = process.env.READER_PROFILE) {
+  const text = (raw || "").trim();
+  if (!text) return { profile: DEFAULT_READER_PROFILE, source: "default" };
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object") return { profile: parsed, source: "env:json" };
+  } catch {
+    // JSON이 아니면 자유 텍스트 프로필로 그대로 사용
+  }
+  return { profile: text, source: "env:text" };
+}
+
+const { profile: READER_PROFILE, source: READER_PROFILE_SOURCE } = loadReaderProfile();
 
 const SAME_EVENT_RULE = {
   same_event: "Both describe the same concrete occurrence: the same announcement, launch, deal, funding round, report, incident, or statement, even if the wording, emphasis, or source differs.",
@@ -78,12 +94,12 @@ async function judgeItem(client, it) {
     state: { candidate: candidateView(it), reader: READER_PROFILE },
     questions: {
       relevance: score(
-        "How important is the news in `candidate` for the reader described in `reader`? Judge by the substance of the event, not by the wording of the headline.",
+        "How important is the news in `candidate` for the reader described in `reader`? Judge by the substance of the event against the reader's stated role and interests, not by the wording of the headline.",
         [
-          "Level 0: Not useful to this reader. A consumer gadget rumor, entertainment, a minor update, or generic commentary with no concrete event.",
-          "Level 1: General tech news worth a glance. A real event in AI, XR, space, or robotics, but no plausible link to heavy industry, manufacturing, or technology strategy.",
-          "Level 2: Significant development the reader should know. A major model, product, launch, policy, or deal in AI, XR, space, or robotics with plausible implications for manufacturing, industrial automation, or corporate technology strategy.",
-          "Level 3: Directly relevant. Concerns the reader's industry head-on, or a strategic shift large enough that the reader's company would need to respond.",
+          "Level 0: Not useful to this reader. Matches the reader's weak interests, or is generic commentary with no concrete event.",
+          "Level 1: General tech news worth a glance. A real event in AI, XR, space, or robotics, but with no plausible link to the reader's role or strong interests.",
+          "Level 2: Significant development the reader should know. A major model, product, launch, policy, or deal with plausible implications for the reader's field or strong interests.",
+          "Level 3: Directly relevant. Concerns the reader's stated industry or strong interests head-on, or is a strategic shift large enough that the reader's organization would need to respond.",
         ]
       ),
       category: choice(
@@ -183,6 +199,8 @@ export async function runShadowJudgments(items, previous, { fetch: fetchImpl } =
   return {
     mode: "shadow",
     model: dup.model || perItem[0]?.model || null,
+    reader_profile_source: READER_PROFILE_SOURCE, // 프로필 내용은 리포트에 남기지 않는다
+
     thresholds: { duplicate: DUP_THRESHOLD, repeat: REPEAT_THRESHOLD },
     elapsed_ms: Date.now() - started,
     usage,
@@ -200,7 +218,8 @@ export function formatShadowReport(rep) {
   const lines = [];
   lines.push(
     `[shadow] 모델 ${rep.model}, 요청 ${rep.usage.requests}회, 입력 ${rep.usage.input_tokens} 토큰, ` +
-    `${(rep.elapsed_ms / 1000).toFixed(1)}초, 이전 헤드라인 ${rep.previous_headlines}개`
+    `${(rep.elapsed_ms / 1000).toFixed(1)}초, 이전 헤드라인 ${rep.previous_headlines}개, ` +
+    `독자 프로필 ${rep.reader_profile_source}`
   );
   lines.push("[shadow] 항목별 판정 (관련도 0~3 / 카테고리 / 재탕확률)");
   for (const j of rep.items) {
