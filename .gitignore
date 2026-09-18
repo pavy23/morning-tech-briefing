@@ -1,5 +1,6 @@
 node_modules/
-.claude/
+.claude/*
+!.claude/skills/
 .env
 .env.local
 *.log
