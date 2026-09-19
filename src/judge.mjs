@@ -15,6 +15,7 @@
 //   - 질문은 문자 그대로 읽는다 → 지시문에 "같은 사건"의 정의와 반례를 명시한다.
 
 import { TypeSafeClient, choice, noul, score } from "@typesafe-ai/sdk";
+import { config } from "./config.mjs";
 
 export function isJudgeEnabled() {
   return Boolean(process.env.TYPESAFE_API_KEY);
@@ -24,14 +25,18 @@ export function isJudgeEnabled() {
 export const DUP_THRESHOLD = Number(process.env.DUP_THRESHOLD || 0.7);
 export const REPEAT_THRESHOLD = Number(process.env.REPEAT_THRESHOLD || 0.7);
 
-const CATEGORIES = ["AI", "XR", "우주", "로봇"];
+// 카테고리 재분류 선택지: briefing.config.json의 key와 description을 그대로 쓴다.
+// description이 없으면 라벨만으로 판정한다(null = 설명 없는 선택지).
+const CATEGORY_CRITERIA = Object.fromEntries(
+  config.categories.map((c) => [c.key, c.description ?? null])
+);
 
 // 독자 프로필은 개인정보라 코드에 두지 않는다. 환경변수 READER_PROFILE(Secrets 권장)에
 // JSON 한 줄 또는 자유 텍스트로 넣는다. 없으면 아래 일반 프로필로 판정한다.
 // 예) {"role":"...","strong_interests":["..."],"weak_interests":["..."]}
 const DEFAULT_READER_PROFILE = {
   role: "A professional who follows global technology news",
-  briefing_purpose: "Daily global tech news in AI, XR, space industry, and robotics",
+  briefing_purpose: `Daily global news briefing on: ${config.topicLabel}`,
   strong_interests: [
     "major model, product, and platform launches",
     "large investments, deals, and policy decisions that shape the industry",
@@ -97,19 +102,14 @@ async function judgeItem(client, it) {
         "How important is the news in `candidate` for the reader described in `reader`? Judge by the substance of the event against the reader's stated role and interests, not by the wording of the headline.",
         [
           "Level 0: Not useful to this reader. Matches the reader's weak interests, or is generic commentary with no concrete event.",
-          "Level 1: General tech news worth a glance. A real event in AI, XR, space, or robotics, but with no plausible link to the reader's role or strong interests.",
+          "Level 1: General news worth a glance. A real event within the briefing's topics, but with no plausible link to the reader's role or strong interests.",
           "Level 2: Significant development the reader should know. A major model, product, launch, policy, or deal with plausible implications for the reader's field or strong interests.",
           "Level 3: Directly relevant. Concerns the reader's stated industry or strong interests head-on, or is a strategic shift large enough that the reader's organization would need to respond.",
         ]
       ),
       category: choice(
         "Which section of the briefing does `candidate` belong to? Choose by the main subject of the event, not by which technologies are mentioned in passing.",
-        {
-          AI: "AI models, AI companies, AI policy and regulation, AI chips and infrastructure, AI safety. Includes AI used in software or science when the AI itself is the story.",
-          XR: "AR, VR, MR headsets and smart glasses, spatial computing, and XR platforms or content.",
-          "우주": "Space industry: launches, satellites, rockets, space agencies, space missions, space policy, and space-based systems, even when AI is used on them.",
-          "로봇": "Robotics: humanoids, industrial and service robots, robot makers, robot factories, and physical AI deployed in robots.",
-        }
+        CATEGORY_CRITERIA
       ),
     },
   });

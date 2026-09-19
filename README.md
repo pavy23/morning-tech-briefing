@@ -87,7 +87,7 @@ git push -u origin main
 GitHub Actions 자동 트리거 (.github/workflows/daily.yml)
         │
         ▼
-src/index.mjs 실행
+src/index.mjs 실행  (주제·카테고리·색상은 briefing.config.json에서 읽음)
         │
         ├─ fetch-news.mjs   → Gemini API + Google 검색으로 뉴스 10개 수집
         │                     + 각 뉴스 링크를 실제 기사 URL로 변환·검증
@@ -174,7 +174,7 @@ npm start
 - 예) 오전 7시 KST → `"0 22 * * *"` (22:00 UTC)
 - ⚠️ GitHub Actions cron은 UTC 기준이며, 부하에 따라 몇 분~십수 분 지연될 수 있습니다
 
-**뉴스 카테고리/개수** — `src/fetch-news.mjs`의 `PROMPT` 수정
+**뉴스 주제/카테고리/개수/색상** — 저장소 루트의 `briefing.config.json` 하나만 수정 (아래 절 참고)
 
 **이메일 디자인** — `src/email-template.mjs`의 `CATEGORIES` 색상 및 `renderCard` 수정
 - 메일은 **다크 테마 전용**입니다. `color-scheme`/`supported-color-schemes` 메타와 배경
@@ -184,6 +184,46 @@ npm start
   설정하면 됩니다.
 
 **주말 제외** — `daily.yml`의 cron을 `"0 23 * * 0-4"`로 변경 (일~목 UTC = 월~금 KST)
+
+### 🗂 주제 바꾸기 — `briefing.config.json`
+
+수집 프롬프트, 메일의 배지 색상·푸터 문구·제목, Jev 카테고리 판정이 **모두 이 파일 하나**를 읽습니다.
+포크해서 다른 주제로 쓰려면 코드는 건드리지 않고 이 파일만 고치면 됩니다.
+
+```json
+{
+  "title": "Morning Tech Briefing",
+  "subjectLabel": "테크 브리핑",
+  "topicLabel": "AI · XR · 우주 · 로봇",
+  "searchScope": "AI, XR(AR/VR/MR), 우주산업, 로봇산업 분야",
+  "total": 10,
+  "categories": [
+    { "key": "AI", "count": 3, "color": "#00D4FF", "bg": "#0a2730",
+      "description": "AI models, companies, policy, chips, safety" },
+    { "key": "로봇", "count": 3,
+      "description": "Humanoids, industrial and service robots, physical AI" }
+  ]
+}
+```
+
+| 필드 | 뜻 | 생략 시 |
+|---|---|---|
+| `title` | 메일 헤더·푸터·평문 첫 줄의 브리핑 이름 | "Morning Tech Briefing" |
+| `subjectLabel` | 메일 제목의 "📡 9월 18일 ○○○" 부분 | "브리핑" |
+| `topicLabel` | 메일 푸터와 Jev 기본 프로필에 쓰는 주제 요약 | 카테고리 key를 " · "로 이어 붙임 |
+| `searchScope` | Gemini 프롬프트의 "…분야 가장 중요한 뉴스" 자리에 들어갈 검색 범위 | `topicLabel` + " 분야" |
+| `total` | 하루 뉴스 개수 | 10 |
+| `categories[].key` | 카테고리 이름. 프롬프트 허용값, 메일 배지, Jev 선택지에 그대로 쓰임 (필수, 중복 불가) | — |
+| `categories[].count` | 권장 개수 | 남는 개수를 고르게 배분 |
+| `categories[].color` / `bg` | 배지·버튼 색 (다크 배경 기준) | 기본 팔레트 8색을 순서대로 배정 |
+| `categories[].description` | Jev가 카테고리를 재분류할 때 보는 정의. 영어로 쓰면 판정이 더 안정적 | 이름만으로 판정 |
+
+주의할 점:
+
+- 모델이 설정에 없는 카테고리를 돌려주면 첫 번째 카테고리로 대체하고 로그에 남깁니다.
+- `total`을 바꾸면 "응답 잘림" 재시도 기준(절반 미만)도 함께 따라갑니다.
+- 다른 경로의 설정 파일을 쓰려면 환경변수 `BRIEFING_CONFIG=경로`로 지정할 수 있습니다.
+- 독자 개인의 관심사는 여기가 아니라 Secret `READER_PROFILE`에 둡니다. 이 파일은 공개해도 되는 "브리핑 정의"만 담습니다.
 
 ---
 
