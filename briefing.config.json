@@ -1,0 +1,38 @@
+{
+  "$comment": "브리핑 주제 정의. 주제/카테고리/개수/색상을 바꾸려면 이 파일만 수정하면 됩니다. 개인 취향(독자 프로필)은 여기가 아니라 Secret READER_PROFILE에 둡니다.",
+  "title": "Morning Tech Briefing",
+  "subjectLabel": "테크 브리핑",
+  "topicLabel": "AI · XR · 우주 · 로봇",
+  "searchScope": "AI, XR(AR/VR/MR), 우주산업, 로봇산업 분야",
+  "total": 10,
+  "categories": [
+    {
+      "key": "AI",
+      "count": 3,
+      "color": "#00D4FF",
+      "bg": "#0a2730",
+      "description": "AI models, AI companies, AI policy and regulation, AI chips and infrastructure, AI safety. Includes AI used in software or science when the AI itself is the story."
+    },
+    {
+      "key": "XR",
+      "count": 2,
+      "color": "#B06EFF",
+      "bg": "#1d1530",
+      "description": "AR, VR, MR headsets and smart glasses, spatial computing, and XR platforms or content."
+    },
+    {
+      "key": "우주",
+      "count": 2,
+      "color": "#FF6B35",
+      "bg": "#301a12",
+      "description": "Space industry: launches, satellites, rockets, space agencies, space missions, space policy, and space-based systems, even when AI is used on them."
+    },
+    {
+      "key": "로봇",
+      "count": 3,
+      "color": "#00FF9D",
+      "bg": "#0a2a1d",
+      "description": "Robotics: humanoids, industrial and service robots, robot makers, robot factories, and physical AI deployed in robots."
+    }
+  ]
+}
