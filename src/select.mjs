@@ -12,12 +12,18 @@ export function selectItems(items, report, {
   dupThreshold = report?.thresholds?.duplicate ?? 0.7,
 } = {}) {
   const n = items.length;
-  const removed = []; // { index, reason: "repeat" | "duplicate", prob, of? }
+  const removed = []; // { index, reason: "offtopic" | "generic" | "repeat" | "duplicate", prob, of? }
   const gone = new Set();
 
-  // 1) 재탕: 이전 브리핑에서 이미 다룬 사건
+  // 1) 주제 이탈("해당 없음" 확률), 일반론(구체적 사건 확률이 낮음), 재탕(이전 브리핑에서 이미 다룬 사건)
   for (const j of report?.items ?? []) {
-    if (j.repeat && j.repeat.prob >= repeatThreshold) {
+    if (j.offtopic?.flagged) {
+      gone.add(j.index);
+      removed.push({ index: j.index, reason: "offtopic", prob: j.offtopic.prob });
+    } else if (j.concrete?.flagged) {
+      gone.add(j.index);
+      removed.push({ index: j.index, reason: "generic", prob: j.concrete.prob });
+    } else if (j.repeat && j.repeat.prob >= repeatThreshold) {
       gone.add(j.index);
       removed.push({ index: j.index, reason: "repeat", prob: j.repeat.prob });
     }
@@ -67,11 +73,13 @@ export function selectItems(items, report, {
 // 콘솔 한 줄 요약 + 제거 목록
 export function formatSelection(sel, items) {
   const lines = [];
-  const reasons = sel.removed.map((r) =>
-    r.reason === "repeat"
-      ? `#${r.index + 1} 재탕 ${r.prob.toFixed(2)} "${items[r.index].headline}"`
-      : `#${r.index + 1} 중복(#${r.of + 1}과 같은 사건 ${r.prob.toFixed(2)}) "${items[r.index].headline}"`
-  );
+  const LABEL = {
+    offtopic: (r) => `주제 이탈(해당 없음 ${r.prob.toFixed(2)})`,
+    generic: (r) => `일반론(사건성 ${r.prob.toFixed(2)})`,
+    repeat: (r) => `재탕 ${r.prob.toFixed(2)}`,
+    duplicate: (r) => `중복(#${r.of + 1}과 같은 사건 ${r.prob.toFixed(2)})`,
+  };
+  const reasons = sel.removed.map((r) => `#${r.index + 1} ${LABEL[r.reason](r)} "${items[r.index].headline}"`);
   const counts = Object.entries(sel.counts).map(([k, v]) => `${k} ${v}`).join(", ");
   lines.push(`[select] 후보 ${sel.candidates}건 → 제거 ${sel.removed.length}건 → ${sel.selected.length}건 선별 (${counts}), 미사용 ${sel.unused.length}건`);
   for (const r of reasons) lines.push(`  - 제거: ${r}`);

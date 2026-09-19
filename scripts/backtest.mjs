@@ -94,6 +94,8 @@ async function main() {
     a: r.report.items[p.i].headline, b: r.report.items[p.j].headline,
   })));
   const catChanges = allItems.filter((j) => j.category_judged.changed);
+  const generics = allItems.filter((j) => j.concrete?.flagged).sort((a, b) => a.concrete.prob - b.concrete.prob);
+  const offtopics = allItems.filter((j) => j.offtopic?.flagged).sort((a, b) => b.offtopic.prob - a.offtopic.prob);
 
   // 정답지 대조
   const known = KNOWN_CASES.map((c) => {
@@ -120,7 +122,8 @@ async function main() {
   L.push(`- 항목 ${allItems.length}건, 요청 ${usage.requests}회, 입력 ${usage.input_tokens.toLocaleString()} 토큰, ${elapsed.toFixed(0)}초`);
   L.push(`- 모델 ${ok[0]?.report.model}, 독자 프로필 ${ok[0]?.report.reader_profile_source}, 임계값 재탕 ${REPEAT_THRESHOLD} / 중복 ${DUP_THRESHOLD}`);
   L.push(`- 재탕 표시: ${repeatsFlagged.length} / ${withHistory.length}건 (${withHistory.length ? (100 * repeatsFlagged.length / withHistory.length).toFixed(1) : 0}%)`);
-  L.push(`- 같은 날 중복 쌍: ${dupPairs.length}쌍, 카테고리 변경 제안: ${catChanges.length}건`, "");
+  L.push(`- 같은 날 중복 쌍: ${dupPairs.length}쌍, 카테고리 변경 제안: ${catChanges.length}건`);
+  L.push(`- 일반론 표시(사건성 ≤ ${ok[0]?.report.thresholds.generic}): ${generics.length}건 (${(100 * generics.length / Math.max(1, allItems.length)).toFixed(1)}%), 주제 이탈 표시(해당 없음 ≥ ${ok[0]?.report.thresholds.offtopic}): ${offtopics.length}건 (${(100 * offtopics.length / Math.max(1, allItems.length)).toFixed(1)}%)`, "");
 
   L.push(`## 정답지 대조 (손으로 확인한 ${KNOWN_CASES.length}건)`, "");
   L.push(`| 종류 | 날짜 | 사례 | 확률 | 결과 |`, `|---|---|---|---|---|`);
@@ -135,6 +138,17 @@ async function main() {
   L.push("", `## 같은 날 중복 쌍 (확률 ≥ ${DUP_THRESHOLD})`, "");
   for (const p of dupPairs) L.push(`- ${p.date} ${p.prob.toFixed(2)}: ${p.a} ↔ ${p.b}`);
   if (!dupPairs.length) L.push("(없음)");
+  L.push("", `## 일반론으로 표시된 항목 (사건성 확률 낮은 순, 최대 60)`, "");
+  for (const j of generics.slice(0, 60)) L.push(`- ${j.date} ${j.concrete.prob.toFixed(2)} [${j.category}] ${j.headline}`);
+  if (!generics.length) L.push("(없음)");
+  L.push("", `## 주제 이탈로 표시된 항목 (해당 없음 확률 높은 순, 최대 60)`, "");
+  for (const j of offtopics.slice(0, 60)) L.push(`- ${j.date} ${j.offtopic.prob.toFixed(2)} [${j.category}] ${j.headline}`);
+  if (!offtopics.length) L.push("(없음)");
+  L.push("", `## 사건성 확률 분포`, "");
+  const cb = Array(10).fill(0);
+  for (const j of allItems) cb[Math.min(9, Math.floor((j.concrete?.prob ?? 0) * 10))]++;
+  L.push(`| 구간 | 건수 |`, `|---|---|`);
+  cb.forEach((n, i) => L.push(`| ${(i / 10).toFixed(1)}~${((i + 1) / 10).toFixed(1)} | ${n} |`));
   L.push("", `## 카테고리 변경 제안`, "");
   for (const j of catChanges) L.push(`- ${j.date} ${j.category}→${j.category_judged.choice} (conf ${j.category_judged.confidence.toFixed(2)}) ${j.headline}`);
   if (!catChanges.length) L.push("(없음)");
@@ -177,6 +191,8 @@ async function main() {
   for (const j of sample) rows.push(["relevance(0-3)", j.date, j.headline, "", j.relevance.score.toFixed(2), "", ""]);
   for (const j of repeatsFlagged) rows.push(["repeat(Y/N)", j.date, j.headline, "", j.repeat.prob.toFixed(2), "", ""]);
   for (const p of dupPairs) rows.push(["same_event(Y/N)", p.date, p.a, p.b, p.prob.toFixed(2), "", ""]);
+  for (const j of generics) rows.push(["generic(Y/N)", j.date, j.headline, "", j.concrete.prob.toFixed(2), "", ""]);
+  for (const j of offtopics) rows.push(["offtopic(Y/N)", j.date, j.headline, "", j.offtopic.prob.toFixed(2), "", ""]);
   const csv = "﻿" + rows.map((r) => r.map(csvEscape).join(",")).join("\n") + "\n";
 
   await mkdir(OUT_DIR, { recursive: true });

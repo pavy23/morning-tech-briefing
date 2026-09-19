@@ -21,15 +21,20 @@ export function isJudgeEnabled() {
   return Boolean(process.env.TYPESAFE_API_KEY);
 }
 
-// 리포트에서 "중복/재탕으로 표시"하는 확률 기준 (판정 자체는 확률 그대로 저장)
-export const DUP_THRESHOLD = Number(process.env.DUP_THRESHOLD || 0.7);
-export const REPEAT_THRESHOLD = Number(process.env.REPEAT_THRESHOLD || 0.7);
+// 제거·표시 기준 확률 (판정 자체는 확률 그대로 저장)
+export const DUP_THRESHOLD = Number(process.env.DUP_THRESHOLD || 0.7);      // 같은 사건 쌍
+export const REPEAT_THRESHOLD = Number(process.env.REPEAT_THRESHOLD || 0.7); // 이전 브리핑 재탕
+export const GENERIC_THRESHOLD = Number(process.env.GENERIC_THRESHOLD || 0.3); // "구체적 사건" 확률이 이 값 이하면 일반론
+export const OFFTOPIC_THRESHOLD = Number(process.env.OFFTOPIC_THRESHOLD || 0.7); // "해당 없음" 확률이 이 값 이상이면 주제 이탈
 
 // 카테고리 재분류 선택지: briefing.config.json의 key와 description을 그대로 쓴다.
 // description이 없으면 라벨만으로 판정한다(null = 설명 없는 선택지).
-const CATEGORY_CRITERIA = Object.fromEntries(
-  config.categories.map((c) => [c.key, c.description ?? null])
-);
+// 어느 카테고리에도 안 맞는 후보(예: 헬기 조달 기사)를 잡기 위해 "해당 없음" 선택지를 둔다.
+export const NONE_KEY = "none";
+const CATEGORY_CRITERIA = {
+  ...Object.fromEntries(config.categories.map((c) => [c.key, c.description ?? null])),
+  [NONE_KEY]: `Outside every section of this briefing. The main subject is not any of: ${config.categories.map((c) => c.key).join(", ")} (for example general military procurement, finance, or consumer news that only mentions these fields in passing).`,
+};
 
 // 독자 프로필은 개인정보라 코드에 두지 않는다. 환경변수 READER_PROFILE(Secrets 권장)에
 // JSON 한 줄 또는 자유 텍스트로 넣는다. 없으면 아래 일반 프로필로 판정한다.
@@ -113,12 +118,26 @@ async function judgeItem(client, it) {
         ]
       ),
       category: choice(
-        "Which section of the briefing does `candidate` belong to? Choose by the main subject of the event, not by which technologies are mentioned in passing.",
+        `Which section of the briefing does \`candidate\` belong to? Choose by the main subject of the event, not by which technologies are mentioned in passing. Choose "${NONE_KEY}" only when the main subject fits no section.`,
         CATEGORY_CRITERIA
+      ),
+      concrete: noul(
+        {
+          question: "Does `candidate` report a concrete news event?",
+          concrete_event: "A specific announcement, launch, deal, funding, decision, regulation, incident, test result, or published report with an identifiable actor, that happened or was announced at a specific time.",
+          not_concrete: "Generic commentary, a trend explainer, an opinion or forecast piece, a listicle or roundup, an evergreen overview, or a vague claim with no identifiable actor or occurrence.",
+        },
+        { true: "Yes: a concrete, datable event with an identifiable actor.", false: "No: generic commentary, trend piece, overview, or forecast without a concrete occurrence." }
       ),
     },
   });
-  return { relevance: res.answers.relevance, category: res.answers.category, usage: res.usage, model: res.model };
+  return {
+    relevance: res.answers.relevance,
+    category: res.answers.category,
+    concrete: res.answers.concrete,
+    usage: res.usage,
+    model: res.model,
+  };
 }
 
 // 2. 전날 재탕: 항목별 한 요청 (state에 이전 헤드라인 포함)
@@ -183,7 +202,16 @@ export async function runShadowJudgments(items, previous, { fetch: fetchImpl } =
     category_judged: {
       choice: perItem[index].category.choice,
       confidence: perItem[index].category.confidence,
-      changed: perItem[index].category.choice !== it.category,
+      // "해당 없음"은 재분류 제안이 아니라 주제 이탈 신호로 따로 다룬다
+      changed: perItem[index].category.choice !== it.category && perItem[index].category.choice !== NONE_KEY,
+    },
+    offtopic: {
+      prob: perItem[index].category.probabilities?.[NONE_KEY] ?? 0,
+      flagged: (perItem[index].category.probabilities?.[NONE_KEY] ?? 0) >= OFFTOPIC_THRESHOLD,
+    },
+    concrete: {
+      prob: perItem[index].concrete.noul,
+      flagged: perItem[index].concrete.noul <= GENERIC_THRESHOLD, // 일반론으로 표시
     },
     repeat: repeats[index] ? { prob: repeats[index].prob, flagged: repeats[index].prob >= REPEAT_THRESHOLD } : null,
   }));
@@ -192,10 +220,10 @@ export async function runShadowJudgments(items, previous, { fetch: fetchImpl } =
     .filter((p) => p.prob >= DUP_THRESHOLD)
     .sort((a, b) => b.prob - a.prob);
 
-  // 제안 순서: 중복 쌍의 뒤쪽(j)과 재탕 항목을 뺀 뒤 관련도 점수 내림차순 (동점이면 원래 순서)
+  // 제안 순서: 주제 이탈·일반론·재탕·중복 쌍의 뒤쪽(j)을 뺀 뒤 관련도 점수 내림차순 (동점이면 원래 순서)
   const dropped = new Set();
+  for (const j of judged) if (j.offtopic.flagged || j.concrete.flagged || j.repeat?.flagged) dropped.add(j.index);
   for (const p of duplicates) if (!dropped.has(p.i)) dropped.add(p.j);
-  for (const j of judged) if (j.repeat?.flagged) dropped.add(j.index);
   const proposed = judged
     .filter((j) => !dropped.has(j.index))
     .sort((a, b) => b.relevance.score - a.relevance.score || a.index - b.index)
@@ -206,7 +234,7 @@ export async function runShadowJudgments(items, previous, { fetch: fetchImpl } =
     model: dup.model || perItem[0]?.model || null,
     reader_profile_source: READER_PROFILE_SOURCE, // 프로필 내용은 리포트에 남기지 않는다
 
-    thresholds: { duplicate: DUP_THRESHOLD, repeat: REPEAT_THRESHOLD },
+    thresholds: { duplicate: DUP_THRESHOLD, repeat: REPEAT_THRESHOLD, generic: GENERIC_THRESHOLD, offtopic: OFFTOPIC_THRESHOLD },
     elapsed_ms: Date.now() - started,
     usage,
     previous_headlines: previous.length,
@@ -226,13 +254,15 @@ export function formatShadowReport(rep) {
     `${(rep.elapsed_ms / 1000).toFixed(1)}초, 이전 헤드라인 ${rep.previous_headlines}개, ` +
     `독자 프로필 ${rep.reader_profile_source}`
   );
-  lines.push("[shadow] 항목별 판정 (관련도 0~3 / 카테고리 / 재탕확률)");
+  lines.push("[shadow] 항목별 판정 (관련도 0~3 / 카테고리 / 사건성 / 이탈 / 재탕확률)");
   for (const j of rep.items) {
     const cat = j.category_judged.changed ? `${j.category}→${j.category_judged.choice}` : j.category;
     const rep_ = j.repeat ? `재탕 ${j.repeat.prob.toFixed(2)}${j.repeat.flagged ? "⚠️" : ""}` : "재탕 -";
+    const con = `사건 ${j.concrete.prob.toFixed(2)}${j.concrete.flagged ? "⚠️" : ""}`;
+    const off = `이탈 ${j.offtopic.prob.toFixed(2)}${j.offtopic.flagged ? "⚠️" : ""}`;
     lines.push(
       `  ${String(j.position).padStart(2, "0")}. 관련도 ${j.relevance.score.toFixed(2)} ` +
-      `(conf ${j.relevance.confidence.toFixed(2)}) [${cat}] ${rep_} | ${j.headline}`
+      `(conf ${j.relevance.confidence.toFixed(2)}) [${cat}] ${con} ${off} ${rep_} | ${j.headline}`
     );
   }
   if (rep.duplicates.length) {
