@@ -10,3 +10,6 @@ preview.html
 # 섀도 판정 상태·리포트 (Actions 캐시/아티팩트로만 보관)
 .briefing-state/
 out/
+
+# 백테스트 산출물 (Actions 아티팩트로만 보관)
+backtest/

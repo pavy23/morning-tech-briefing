@@ -6,7 +6,9 @@
   "description": "매일 오전 8시 KST에 AI/XR/우주/로봇 뉴스를 이메일로 발송",
   "scripts": {
     "start": "node src/index.mjs",
-    "test:local": "node src/index.mjs"
+    "test:local": "node src/index.mjs",
+    "backtest": "node scripts/backtest.mjs backtest/days.json backtest",
+    "backtest:extract": "node scripts/extract-history.mjs backtest/days.json"
   },
   "engines": {
     "node": ">=18"
