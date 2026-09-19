@@ -1,16 +1,17 @@
 // src/fetch-news.mjs
 // Gemini API + Google Search grounding으로 briefing.config.json에 정의된 주제의 뉴스를 수집
 
-import { config, categoryKeys, defaultCategory, normalizeCategory } from "./config.mjs";
+import { config, categoryKeys, defaultCategory, normalizeCategory, quotasFor } from "./config.mjs";
 
 const MODEL = process.env.MODEL || "gemini-2.5-flash";
 // 기본 모델이 503/429 같은 일시적 과부하로 거듭 실패할 때 쓸 백업 모델.
 // (그라운딩 품질은 다소 낮아도 "메일 누락"보다는 낫다. 같은 모델이면 폴백 비활성.)
 const FALLBACK_MODEL = process.env.FALLBACK_MODEL || "gemini-2.5-flash-lite";
 
-// 프롬프트는 설정 파일의 주제·카테고리·개수 배분으로 조립한다 (주제 변경 시 코드 수정 불필요)
-export function buildPrompt(cfg = config) {
-  const quota = cfg.categories.map((c) => `${c.key} ${c.count}개`).join(", ");
+// 프롬프트는 설정 파일의 주제·카테고리·개수 배분으로 조립한다 (주제 변경 시 코드 수정 불필요).
+// want: 요청할 건수. Jev 선별이 켜지면 목표(total)보다 많이 받아 재탕·중복을 뺀 자리를 채운다.
+export function buildPrompt(cfg = config, want = cfg.total) {
+  const quota = quotasFor(want, cfg).map((q) => `${q.key} ${q.count}개`).join(", ");
   const allowed = cfg.categories.map((c) => `"${c.key}"`).join(", ");
   return `당신은 글로벌 테크 뉴스 에디터입니다.
 Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.searchScope} 가장 중요한 글로벌 주요 뉴스를 찾아 아래 JSON 형식으로만 응답하세요.
@@ -32,14 +33,13 @@ Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.
 }
 
 규칙:
-- 총 ${cfg.total}개: ${quota} 권장
+- 총 ${want}개: ${quota} 권장
 - category는 반드시 ${allowed} 중 하나
 - importance는 "high" 또는 "medium"
 - url은 반드시 https://로 시작하는 실제 기사 URL
 - summary는 150자 이내, 한국어로 작성
 - 순수 JSON만 출력`;
 }
-const PROMPT = buildPrompt();
 
 // 잘린 JSON도 최대한 복구하는 파서
 function parseNewsJSON(raw) {
@@ -228,8 +228,9 @@ function backoffMs(attempt) {
 
 // Gemini API 호출 + JSON 파싱만 담당 (링크 변환 제외).
 // { items, chunkUris, finishReason } 반환. 실패 시 throw.
-async function fetchRawItems(apiKey, model = MODEL) {
+async function fetchRawItems(apiKey, model = MODEL, want = config.total) {
   const todayKst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+  const PROMPT = buildPrompt(config, want);
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -288,9 +289,11 @@ async function fetchRawItems(apiKey, model = MODEL) {
   return { items: parsed.items, chunkUris, finishReason: candidate.finishReason || "unknown" };
 }
 
-export async function fetchNews() {
+// want: Gemini에 요청할 건수 (기본 config.total). 선별 단계가 있으면 config.candidates를 넘긴다.
+export async function fetchNews({ want = config.total } = {}) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY 환경변수가 없습니다");
+  console.log(`[fetch-news] 목표 ${config.total}건, 요청 ${want}건`);
 
   // 항목이 너무 적으면(잘림) 또는 실제 기사 링크가 너무 적으면(그라운딩 누락=환각 의심)
   // 재시도하며, 가장 좋은 결과(실제 링크 수 → 항목 수 순)를 보관한다.
@@ -305,7 +308,7 @@ export async function fetchNews() {
       transientFails >= FALLBACK_AFTER && FALLBACK_MODEL && FALLBACK_MODEL !== MODEL;
     const model = useFallback ? FALLBACK_MODEL : MODEL;
     try {
-      const r = await fetchRawItems(apiKey, model);
+      const r = await fetchRawItems(apiKey, model, want);
       // 링크를 실제 기사 URL로 변환·검증 (만료/404/톱페이지 방지) + 품질 집계
       r.stats = await resolveAllLinks(r.items, r.chunkUris);
       r.model = model;

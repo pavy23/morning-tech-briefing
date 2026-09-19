@@ -52,6 +52,8 @@ jobs:
           MODEL: ${{ vars.MODEL }}
           FALLBACK_MODEL: ${{ vars.FALLBACK_MODEL }}
           MIN_GROUNDED_LINKS: ${{ vars.MIN_GROUNDED_LINKS }}
+          # Jev 선별 모드 (기본 켜짐). Variables에 JEV_SELECT=shadow 를 두면 기록만 하고 메일은 그대로
+          JEV_SELECT: ${{ vars.JEV_SELECT }}
           SKIP_EMAIL: ${{ inputs.skip_email == true && '1' || '' }}
         run: node src/index.mjs
 
