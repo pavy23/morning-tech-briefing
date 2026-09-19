@@ -5,7 +5,9 @@ import { fetchNews } from "./fetch-news.mjs";
 import { buildEmailHTML, buildEmailText, buildSubject } from "./email-template.mjs";
 import { sendEmail } from "./send-email.mjs";
 import { isJudgeEnabled, runShadowJudgments, formatShadowReport } from "./judge.mjs";
+import { selectItems, formatSelection } from "./select.mjs";
 import { loadHistory, appendHistory, previousHeadlines, todayKst } from "./history.mjs";
+import { config } from "./config.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 
@@ -15,8 +17,11 @@ const TO_EMAIL = process.env.TO_EMAIL;
 const FROM_EMAIL = process.env.FROM_EMAIL || "Morning Tech Briefing <onboarding@resend.dev>";
 // 테스트용: "1"이면 수집·판정만 하고 메일은 보내지 않는다 (이력도 갱신하지 않음)
 const SKIP_EMAIL = process.env.SKIP_EMAIL === "1" || process.env.SKIP_EMAIL === "true";
-// 섀도 판정 리포트 저장 폴더 (Actions 아티팩트로 업로드)
+// 판정 리포트 저장 폴더 (Actions 아티팩트로 업로드)
 const OUT_DIR = process.env.OUT_DIR || "out";
+// Jev 선별 모드. 기본 켜짐: 재탕·같은 날 중복을 실제로 빼고 과수집한 후보로 채운다.
+// "0" / "off" / "shadow" 로 두면 판정만 기록하고 메일은 Gemini 결과 그대로 보낸다.
+const JEV_SELECT = !/^(0|false|off|shadow)$/i.test((process.env.JEV_SELECT || "1").trim());
 
 // 일시 실패용 재시도 래퍼.
 // 주의: fetchNews는 내부에 자체 재시도(백오프+모델 폴백)가 있으므로 여기서 감싸지 않는다
@@ -46,40 +51,78 @@ async function main() {
   console.log("");
 
   // 1. 뉴스 수집 (fetchNews 내부에 자체 재시도+폴백이 있어 추가 래핑 불필요)
-  console.log("📡 뉴스 수집 중...");
-  const news = await fetchNews();
+  //    Jev 선별이 켜져 있으면 목표보다 많이(config.candidates) 받아 재탕·중복을 뺀 자리를 채운다.
+  const active = isJudgeEnabled() && JEV_SELECT;
+  const want = active ? config.candidates : config.total;
+  console.log(`📡 뉴스 수집 중... (모드: ${active ? "Jev 선별" : isJudgeEnabled() ? "Jev 섀도" : "Gemini 단독"})`);
+  const news = await fetchNews({ want });
   console.log(
-    `✓ ${news.items.length}개 뉴스 수집 완료 (모델: ${news.model}, ` +
+    `✓ ${news.items.length}개 후보 수집 완료 (모델: ${news.model}, ` +
     `실제 기사 링크 ${news.stats.real}/${news.stats.total}, 검색 폴백 ${news.stats.fallback})`
   );
-  // 링크 상태를 함께 남겨 두면 나중에 "정상일 때 보통 몇 개가 살아남는지" 기준을 잡을 수 있다.
+  // 후보 목록. 번호 형식을 발송 목록("01. [AI] …")과 다르게 두어 로그 파서가 헷갈리지 않게 한다.
+  // 링크 상태를 함께 남겨 두면 "정상일 때 보통 몇 개가 살아남는지" 기준을 잡을 수 있다.
   const LINK_TAG = { grounded: "", direct: " (직접URL)", fallback: " ⚠️검색폴백" };
   news.items.forEach((it, i) => {
-    console.log(
-      `  ${String(i + 1).padStart(2, "0")}. [${it.category}] ${it.headline}${LINK_TAG[it.linkStatus] ?? ""}`
-    );
+    console.log(`  (c${String(i + 1).padStart(2, "0")}) [${it.category}] ${it.headline}${LINK_TAG[it.linkStatus] ?? ""}`);
   });
   console.log("");
 
-  // 2. TypeSafe(Jev) 섀도 판정 — 메일 내용은 바꾸지 않고 리포트만 남긴다.
-  //    실패해도 발송에는 영향이 없어야 하므로 통째로 감싼다.
+  // 2. TypeSafe(Jev) 판정 → 선별. 판정 실패 시 기존 방식(앞에서 total건)으로 폴백해 발송은 지킨다.
   const today = todayKst();
   const history = await loadHistory();
+  let report = null;
+  let selection = null;
   if (isJudgeEnabled()) {
-    console.log("🧪 TypeSafe 섀도 판정 중...");
+    console.log(`🧪 TypeSafe 판정 중... (${active ? "재탕·중복 제거 적용" : "섀도: 기록만"})`);
     try {
-      const report = await runShadowJudgments(news.items, previousHeadlines(history, today));
+      report = await runShadowJudgments(news.items, previousHeadlines(history, today));
       console.log(formatShadowReport(report));
-      await mkdir(OUT_DIR, { recursive: true });
-      const file = `${OUT_DIR}/shadow-${today}.json`;
-      await writeFile(file, JSON.stringify({ date: today, ...report }, null, 2));
-      console.log(`[shadow] 리포트 저장: ${file}`);
     } catch (e) {
-      console.error(`[shadow] 판정 실패 (메일 발송에는 영향 없음): ${e.message}`);
+      console.error(`[judge] 판정 실패 (메일 발송에는 영향 없음): ${e.message}`);
     }
   } else {
-    console.log("[shadow] TYPESAFE_API_KEY 없음 → 섀도 판정 생략");
+    console.log("[judge] TYPESAFE_API_KEY 없음 → 판정 생략");
   }
+
+  if (active && report) {
+    selection = selectItems(news.items, report, { total: config.total });
+    console.log(formatSelection(selection, news.items));
+    news.items = selection.selected;
+  } else if (news.items.length > config.total) {
+    console.log(`[select] ${active ? "판정 실패 → 폴백:" : "선별 비활성:"} 앞에서 ${config.total}건 사용`);
+    news.items = news.items.slice(0, config.total);
+  }
+
+  if (report) {
+    try {
+      await mkdir(OUT_DIR, { recursive: true });
+      const file = `${OUT_DIR}/judge-${today}.json`;
+      const body = {
+        date: today,
+        ...report,
+        mode: active ? "active" : "shadow",
+        selection: selection && {
+          candidates: selection.candidates,
+          removed: selection.removed,
+          unused: selection.unused,
+          counts: selection.counts,
+          selected_candidate_indices: selection.selected.map((it) => it.candidateIndex),
+        },
+      };
+      await writeFile(file, JSON.stringify(body, null, 2));
+      console.log(`[judge] 리포트 저장: ${file}`);
+    } catch (e) {
+      console.error(`[judge] 리포트 저장 실패: ${e.message}`);
+    }
+  }
+  console.log("");
+
+  // 발송 목록 (이 형식 "NN. [카테고리] 헤드라인"을 백테스트 로그 파서가 읽는다)
+  console.log(`📬 발송 목록 ${news.items.length}건`);
+  news.items.forEach((it, i) => {
+    console.log(`  ${String(i + 1).padStart(2, "0")}. [${it.category}] ${it.headline}${LINK_TAG[it.linkStatus] ?? ""}`);
+  });
   console.log("");
 
   // 3. 이메일 구성

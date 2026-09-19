@@ -67,6 +67,9 @@ function loadConfig() {
     ? raw.topicLabel
     : categories.map((c) => c.key).join(" · ");
 
+  // Jev 선별이 켜져 있을 때 Gemini에 요청할 후보 수. 재탕·중복을 뺀 빈자리를 채우려면 여유가 필요하다.
+  const candidates = Number.isInteger(raw.candidates) && raw.candidates > total ? raw.candidates : total * 2;
+
   return {
     path: CONFIG_PATH,
     title: typeof raw.title === "string" && raw.title ? raw.title : "Morning Tech Briefing",
@@ -74,6 +77,7 @@ function loadConfig() {
     topicLabel,
     searchScope: typeof raw.searchScope === "string" && raw.searchScope ? raw.searchScope : `${topicLabel} 분야`,
     total,
+    candidates,
     categories,
   };
 }
@@ -82,6 +86,22 @@ export const config = loadConfig();
 export const categoryKeys = config.categories.map((c) => c.key);
 export const categoryMap = Object.fromEntries(config.categories.map((c) => [c.key, c]));
 export const defaultCategory = config.categories[0];
+
+// 카테고리별 권장 개수를 n건 기준으로 비례 배분 (최대 나머지 방식). n === total이면 설정값 그대로.
+export function quotasFor(n, cfg = config) {
+  const exact = cfg.categories.map((c) => (c.count * n) / cfg.total);
+  const counts = exact.map(Math.floor);
+  let remainder = n - counts.reduce((a, b) => a + b, 0);
+  const byFrac = exact
+    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i);
+  for (const { i } of byFrac) {
+    if (remainder <= 0) break;
+    counts[i]++;
+    remainder--;
+  }
+  return cfg.categories.map((c, i) => ({ key: c.key, count: counts[i] }));
+}
 
 // 모델이 돌려준 카테고리를 설정의 key로 정규화 (대소문자/공백 차이 허용). 못 찾으면 null.
 export function normalizeCategory(value) {
