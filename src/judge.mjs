@@ -64,8 +64,13 @@ const SAME_EVENT_RULE = {
   not_same_event: "They merely share a topic, company, technology, or theme; or one is a genuinely new development (a new date, a new deal, a follow-up reaction) that the other does not contain.",
 };
 
+// 비어 있는 필드는 넣지 않는다 (불필요한 state 필드는 판정 정확도를 떨어뜨린다; 백테스트는 헤드라인만 있음)
 function candidateView(it) {
-  return { category: it.category, headline: it.headline, summary: it.summary, source: it.source };
+  const v = {};
+  for (const k of ["category", "headline", "summary", "source"]) {
+    if (typeof it[k] === "string" && it[k].trim()) v[k] = it[k];
+  }
+  return v;
 }
 
 // 1. 같은 날 중복: 한 요청, 쌍별 Noul

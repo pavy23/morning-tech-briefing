@@ -1,0 +1,56 @@
+name: Jev Backtest (past briefings)
+
+# 수동 실행 전용. 과거 90일치 실제 발송 헤드라인을 Actions 로그에서 추출해
+# Jev 판정(재탕·중복·관련도·카테고리)을 한꺼번에 돌리고 결과를 아티팩트로 올린다.
+# 메일은 보내지 않고 Gemini도 호출하지 않는다.
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "채점 시트에 넣을 관련도 표본 수"
+        type: number
+        default: 60
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Extract past briefings from Actions logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node scripts/extract-history.mjs backtest/days.json
+
+      - name: Run Jev backtest
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          READER_PROFILE: ${{ secrets.READER_PROFILE }}
+          BACKTEST_SAMPLE: ${{ inputs.sample }}
+        run: node scripts/backtest.mjs backtest/days.json backtest
+
+      - name: Upload backtest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jev-backtest-${{ github.run_id }}
+          path: backtest/
+          if-no-files-found: warn
+          retention-days: 90
