@@ -47,7 +47,7 @@ git push -u origin main
 
 저장소 페이지에서 **Settings → Secrets and variables → Actions → "New repository secret"**
 
-아래 4개를 각각 등록 (5번째는 선택):
+아래 4개는 필수, 나머지 2개(TypeSafe 관련)는 선택:
 
 | Name | Value |
 |------|-------|
@@ -176,7 +176,7 @@ npm start
 
 **뉴스 주제/카테고리/개수/색상** — 저장소 루트의 `briefing.config.json` 하나만 수정 (아래 절 참고)
 
-**이메일 디자인** — `src/email-template.mjs`의 `CATEGORIES` 색상 및 `renderCard` 수정
+**이메일 디자인** — 카테고리 색상은 `briefing.config.json`의 `color`/`bg`, 카드 레이아웃은 `src/email-template.mjs`의 `renderCard` 수정
 - 메일은 **다크 테마 전용**입니다. `color-scheme`/`supported-color-schemes` 메타와 배경
   `bgcolor` 속성으로 라이트 자동변환을 막아, **Gmail 웹·Apple Mail** 등에서는 다크로 고정됩니다.
 - ⚠️ **Gmail 모바일 앱**은 메일 코드와 무관하게 **기기/앱 테마를 따라갑니다** (코드로 강제 불가).
@@ -325,13 +325,18 @@ Claude Code가 `git`, `gh secret set`, `gh workflow run` 명령을 순서대로 
 
 ```
 morning-tech-briefing/
-├── .github/workflows/daily.yml   # 매일 8시 KST cron
+├── .github/workflows/daily.yml   # 매일 8시 KST cron, 이력 캐시, 리포트 아티팩트
+├── briefing.config.json          # 주제·카테고리·개수·색상 정의 (주제 바꾸려면 여기)
 ├── src/
-│   ├── index.mjs                 # 메인 엔트리
-│   ├── fetch-news.mjs            # Gemini API 뉴스 수집
+│   ├── index.mjs                 # 메인 엔트리: 수집 → 섀도 판정 → 발송 → 이력 기록
+│   ├── config.mjs                # briefing.config.json 로더·검증
+│   ├── fetch-news.mjs            # Gemini API 뉴스 수집 + 링크 검증 + 환각 배치 가드
+│   ├── judge.mjs                 # TypeSafe(Jev) 섀도 판정 (중복·재탕·관련도·카테고리)
+│   ├── history.mjs               # 발송 헤드라인 이력 (.briefing-state/, 캐시로 유지)
 │   ├── email-template.mjs        # HTML 이메일 생성
 │   └── send-email.mjs            # Resend 발송
-├── package.json
+├── .claude/skills/typesafe-ai/   # TypeSafe 스킬 (Claude Code용, 런타임과 무관)
+├── package.json / package-lock.json
 ├── .env.example
 └── README.md
 ```
