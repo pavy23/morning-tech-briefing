@@ -143,6 +143,30 @@ async function main() {
     const top = [...r.report.items].sort((a, b) => b.relevance.score - a.relevance.score).slice(0, 3);
     L.push(`- **${r.date}**: ` + top.map((j) => `${j.relevance.score.toFixed(2)} ${j.headline}`).join(" · "));
   }
+
+  // 분포 통계: 판정이 얼마나 확신에 차 있는지(보정), 카테고리별 관련도 경향, 전체 상·하위
+  L.push("", `## 재탕 확률 분포 (이력이 있는 ${withHistory.length}건)`, "");
+  const bins = Array(10).fill(0);
+  for (const j of withHistory) bins[Math.min(9, Math.floor(j.repeat.prob * 10))]++;
+  L.push(`| 구간 | 건수 |`, `|---|---|`);
+  bins.forEach((n, i) => L.push(`| ${(i / 10).toFixed(1)}~${((i + 1) / 10).toFixed(1)} | ${n} |`));
+  const gray = withHistory.filter((j) => j.repeat.prob >= 0.3 && j.repeat.prob < 0.7).length;
+  L.push("", `회색지대(0.3~0.7): ${gray}건 (${(100 * gray / Math.max(1, withHistory.length)).toFixed(1)}%)`);
+
+  L.push("", `## 카테고리별 관련도 평균`, "");
+  L.push(`| 카테고리 | 건수 | 평균 점수 | 평균 confidence |`, `|---|---|---|---|`);
+  const byCat = new Map();
+  for (const j of allItems) {
+    const b = byCat.get(j.category) || { n: 0, s: 0, c: 0 };
+    b.n++; b.s += j.relevance.score; b.c += j.relevance.confidence; byCat.set(j.category, b);
+  }
+  for (const [k, b] of byCat) L.push(`| ${k} | ${b.n} | ${(b.s / b.n).toFixed(2)} | ${(b.c / b.n).toFixed(2)} |`);
+
+  const byScore = [...allItems].sort((a, b) => b.relevance.score - a.relevance.score);
+  L.push("", `## 관련도 전체 상위 15`, "");
+  for (const j of byScore.slice(0, 15)) L.push(`- ${j.date} ${j.relevance.score.toFixed(2)} [${j.category}] ${j.headline}`);
+  L.push("", `## 관련도 전체 하위 10`, "");
+  for (const j of byScore.slice(-10).reverse()) L.push(`- ${j.date} ${j.relevance.score.toFixed(2)} [${j.category}] ${j.headline}`);
   const summary = L.join("\n") + "\n";
 
   // ── grading.csv ──
@@ -160,8 +184,9 @@ async function main() {
   await writeFile(`${OUT_DIR}/summary.md`, summary);
   await writeFile(`${OUT_DIR}/grading.csv`, csv);
 
+  // 아티팩트를 못 받는 환경에서도 볼 수 있게 요약 전체를 로그에 남긴다 (수백 줄 수준)
   console.log("");
-  console.log(summary.split("\n").slice(0, 60).join("\n"));
+  console.log(summary);
   console.log(`[backtest] 저장: ${OUT_DIR}/results.json, summary.md, grading.csv (채점 행 ${rows.length - 1}개)`);
 }
 
