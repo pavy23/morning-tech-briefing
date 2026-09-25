@@ -71,7 +71,9 @@ The first four are required; the last two (TypeSafe) are optional:
 
 > (optional) To change the model, add `MODEL` under the **Variables** tab (for example `gemini-2.5-flash-lite`, faster with a larger free quota)
 >
-> (optional) To change the backup model used when the primary one keeps failing with transient errors, add `FALLBACK_MODEL` under **Variables**. The default is `gemini-2.5-flash-lite`; setting it equal to `MODEL` disables the fallback.
+> (optional) To change the backup model used when the primary one keeps failing with transient errors, add `FALLBACK_MODEL` under **Variables**. The default is `gemini-3.5-flash-lite`; setting it equal to `MODEL` disables the fallback.
+>
+> ⚠️ `gemini-2.5-flash` and `gemini-2.5-flash-lite` are scheduled to shut down on the Gemini API on **2026-10-16** (per Google's deprecation notices; Google names `gemini-3.6-flash` as the replacement for 2.5 Flash). Move `MODEL` to a supported model before then.
 
 ### Step 4 · Test run
 
@@ -121,12 +123,13 @@ invents the news (observed on 2026-09-17: ten non-existent stories such as "Gemi
 went out as a normal email). Every URL in such a batch is fabricated, so almost none survive link resolution.
 `fetch-news.mjs` therefore **tallies link resolution on every attempt**:
 
-- If fewer than `MIN_GROUNDED_LINKS` (default 3) links resolve to real articles, the attempt is treated as hallucinated and **collection is retried**
-- Across up to 5 attempts the result with the **most real links** wins (if all fail, it still sends, on the grounds that a weak briefing beats a missing one)
+- If fewer than `MIN_GROUNDED_LINKS` links resolve to real articles, the attempt is treated as hallucinated and **collection is retried**. The default scales with the number of stories requested: **30%, at least 3** (10 requested → 3, 20 candidates → 6). On healthy days 12–16 of 20 survive; on hallucinated days 2–3 do
+- If the primary model returns **zero grounding chunks**, Google Search did not run, and the attempt is retried regardless of the link count (on 2026-09-25 three fabricated URLs happened to be live and slipped past the count alone)
+- Across up to 6 attempts the result with the **most real links** wins (if all fail, it still sends, on the grounds that a weak briefing beats a missing one)
 - Each attempt logs `items / grounding chunks / real links / search fallbacks`, and each item is tagged `⚠️검색폴백` when it fell back, so the threshold can be tuned from a few days of logs
 
-Tune it with the `MIN_GROUNDED_LINKS` repository variable (0 disables the guard). Check how many links normally
-survive and set the threshold below half of that.
+Tune it with the `MIN_GROUNDED_LINKS` repository variable as an absolute count (0 disables the guard; an empty
+value means "use the default"). Check how many links normally survive and set the threshold below half of that.
 
 ### 🧪 TypeSafe (Jev) judgments and selection — repeats, duplicates, generic and off-topic are removed; ordering is unchanged for now
 
@@ -359,7 +362,7 @@ Free-tier limits vary by model and date; check the Google AI Studio pricing page
 - If 429s persist after switching to `gemini-3.5-flash`, that key has no free grounded quota for the model → set `MODEL` back to `gemini-2.5-flash`
 
 **"Gemini API 503"**
-- Transient overload. `fetch-news.mjs` retries **up to 5 times with exponential backoff (2→4→8→16 s, with jitter)** and switches to the **backup model (`gemini-2.5-flash-lite`)** after two transient failures (429/5xx) of the primary, so the send is not lost
+- Transient overload. `fetch-news.mjs` waits **20 s, then 40 s** between transient failures (429/5xx) of the primary model and, after the third one, switches to the **backup model (`gemini-3.5-flash-lite`)** so the send is not lost. The backup is asked for only `total` stories (not the full candidate pool) because lighter models truncate long outputs, and it must pass the same grounding guard. If the backup itself fails (wrong model ID, no quota), the remaining attempts go back to the primary. Six attempts in total
 - If it still fails the overload lasted a while → re-run the job from the Actions tab
 - The backup model is set with the `FALLBACK_MODEL` variable (equal to `MODEL` disables the fallback)
 
@@ -369,7 +372,7 @@ Free-tier limits vary by model and date; check the Google AI Studio pricing page
 **Every story is generic commentary or a non-existent announcement (e.g. "○○ 2.0 launch imminent")**
 - A batch the model made up without Google Search grounding. A log line like `실제 기사 링크 0/20` (real links 0/20) followed by
   `그라운딩 누락(환각 배치) 의심 → 재시도` (suspected hallucinated batch → retry) means the guard fired
-- If it still failed after 5 attempts and sent anyway, the log ends with a `재시도 후에도 실제 기사 링크 N개뿐` warning → re-run manually
+- If it still failed after 6 attempts and sent anyway, the log ends with a `재시도 후에도 실제 기사 링크 N개뿐` warning → re-run manually
 - If real news keeps triggering retries every day, lower `MIN_GROUNDED_LINKS` (see how many real links a normal day has)
 
 **The `[select]` line often shows "미사용 0건" (0 unused)**
