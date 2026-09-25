@@ -11,11 +11,15 @@ on:
         description: "메일을 보내지 않고 수집·섀도 판정 로그만 확인"
         type: boolean
         default: false
+      model:
+        description: "이번 실행에서만 쓸 Gemini 모델 (비우면 Variables의 MODEL). 모델 교체 전 테스트용"
+        type: string
+        default: ""
 
 jobs:
   send-briefing:
     runs-on: ubuntu-latest
-    # 시도마다 링크 검증(최대 ~16초)이 붙고, 최대 5회 재시도 + 백오프까지 감안
+    # 시도마다 링크 검증(최대 ~16초)이 붙고, 최대 6회 재시도 + 백오프(일시 오류 시 20·40초)까지 감안
     timeout-minutes: 15
 
     steps:
@@ -49,7 +53,7 @@ jobs:
           READER_PROFILE: ${{ secrets.READER_PROFILE }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
-          MODEL: ${{ vars.MODEL }}
+          MODEL: ${{ inputs.model || vars.MODEL }}
           FALLBACK_MODEL: ${{ vars.FALLBACK_MODEL }}
           MIN_GROUNDED_LINKS: ${{ vars.MIN_GROUNDED_LINKS }}
           # Jev 선별 모드 (기본 켜짐). Variables에 JEV_SELECT=shadow 를 두면 기록만 하고 메일은 그대로
