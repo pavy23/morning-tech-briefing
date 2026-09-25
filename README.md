@@ -302,10 +302,10 @@ the avatar empty is recommended (it has no effect on functionality).
 |------|------|
 | GitHub Actions | Free (2,000 minutes a month for private repos; a run takes about 2 minutes) |
 | Resend | Free (3,000 a month; this uses 30) |
-| Gemini API | **Free** (5,000 grounded searches a month; this uses 30) |
+| Gemini API | Free on `gemini-2.5-flash` until its shutdown (2026-10-16). On the paid tier with `gemini-3.6-flash`: about 1k input + 10k output tokens a run (thinking included) → **about $0.04 a day, $1.2 a month** at the introductory price, about $2.4 from 2027. Grounded searches stay free (5,000 a month; this uses 30–200) |
 | TypeSafe (Jev) | Optional. 41 requests and about 66k input tokens a day → **about $0.003 a day, $0.1 a month** (input $0.042/M, output free). One 87-day backtest is about $0.3 |
 
-> At one send a day the first three stay **within their free tiers**, and Jev costs about ten cents a month. Gemini and Resend need no credit card.
+> At one send a day GitHub and Resend stay within their free tiers and Jev costs about ten cents a month. Gemini is free only on the 2.5 models, which Google retires on 2026-10-16; the free tier of the API key used here had **zero quota for every 3.x model** (429 on the first call), so the 3.x path needs billing enabled in Google AI Studio.
 
 ### Could a general LLM do this instead of Jev?
 
@@ -332,14 +332,21 @@ Price sources: TypeSafe pricing summary ([Developers Digest](https://www.develop
 Gemini 2026 pricing summaries ([CloudZero](https://www.cloudzero.com/blog/gemini-pricing/), [Morph](https://www.morphllm.com/gemini-api-pricing)).
 Free-tier limits vary by model and date; check the Google AI Studio pricing page.
 
-**Model choice** (free quota and grounding quality differ by model)
-- `gemini-2.5-flash` (default, **recommended**): stable grounding and sources given as **verifiable redirect URLs**, so links resolve well to real articles
-- `gemini-2.5-flash-lite`: faster, but ⚠️ **weak grounding; it often produces non-existent URLs (404 or front pages)**, so link quality drops. **Not recommended**
-- `gemini-3.5-flash`: newest and strongest. ⚠️ **Depending on the key type the free grounded quota can be 0, which yields 429s.** If you see 429s, switch back to `2.5-flash`.
+**Model choice** (quota and grounding behaviour differ by model generation)
+- `gemini-3.6-flash` (**recommended**, paid tier): Google's named replacement for 2.5 Flash. Measured 2026-09-25: 17/20 real article links on the first attempt, 20/20 items with a grounding source. Needs billing; the free tier returned 429 for every 3.x model on this key
+- `gemini-2.5-flash` (code default, free tier): stable grounding, but **shut down on the Gemini API on 2026-10-16**
+- `gemini-2.5-flash-lite`: ⚠️ weak grounding, and shut down on the same date. **Not recommended**
 
-> Note: 2.5-flash spends about 2,700 tokens thinking before answering, so a low `maxOutputTokens` in
-> `src/fetch-news.mjs` (for example 4096) truncates the JSON and yields only one or two stories.
-> It is currently **16384**, which collects all 20 candidates intact.
+> **Gemini 3.x and JSON.** 3.x models silently skip Google Search when the prompt asks for JSON output
+> ([cookbook#1274](https://github.com/google-gemini/cookbook/issues/1274); measured here: seven attempts, no
+> `groundingMetadata`, 1–4 real links out of 20). For models matching `gemini-3*` the collector therefore asks
+> for a numbered list of labelled lines instead of JSON and attaches each item's source from
+> `groundingSupports` in code, so the model never writes a URL itself. `NEWS_FORMAT=json|list` overrides the
+> automatic choice.
+>
+> Note: thinking tokens count against `maxOutputTokens`. 2.5-flash uses about 2,700 of them, 3.6-flash about
+> 7,000–9,000, so the limit in `src/fetch-news.mjs` is **32768**. A much lower value truncates the output and
+> yields only a few stories.
 
 ---
 
