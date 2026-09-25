@@ -285,6 +285,22 @@ async function fetchRawItems(apiKey, model = MODEL, want = config.total) {
 
   // 응답 텍스트 추출
   const candidate = data?.candidates?.[0];
+  // 모델 세대에 따라 그라운딩 메타데이터 위치·형태가 다를 수 있어, 진단용으로 응답 구조를 남긴다.
+  if (process.env.DEBUG_GEMINI_RESPONSE) {
+    const gm = candidate?.groundingMetadata;
+    const parts = candidate?.content?.parts || [];
+    console.log("[debug] candidate keys:", Object.keys(candidate || {}).join(", "));
+    console.log("[debug] parts:", parts.map((p) => Object.keys(p).join("+")).join(" | "));
+    console.log("[debug] groundingMetadata keys:", gm ? Object.keys(gm).join(", ") : "(없음)");
+    console.log("[debug] groundingChunks:", JSON.stringify(gm?.groundingChunks?.slice(0, 3) ?? null));
+    console.log("[debug] groundingSupports:", JSON.stringify(gm?.groundingSupports?.slice(0, 2) ?? null));
+    console.log("[debug] webSearchQueries:", JSON.stringify(gm?.webSearchQueries ?? null));
+    console.log("[debug] urlContextMetadata:", JSON.stringify(candidate?.urlContextMetadata ?? null)?.slice(0, 600));
+    console.log("[debug] usageMetadata:", JSON.stringify(data?.usageMetadata ?? null));
+    const text = parts.map((p) => p.text || "").join("");
+    const urls = [...text.matchAll(/"url"\s*:\s*"([^"]+)"/g)].slice(0, 5).map((m) => m[1]);
+    console.log("[debug] 모델이 준 url 앞 5개:", JSON.stringify(urls));
+  }
   if (!candidate) {
     throw new Error(`Gemini 응답에 candidates 없음: ${JSON.stringify(data).slice(0, 300)}`);
   }

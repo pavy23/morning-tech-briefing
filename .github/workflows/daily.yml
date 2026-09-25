@@ -15,6 +15,10 @@ on:
         description: "이번 실행에서만 쓸 Gemini 모델 (비우면 Variables의 MODEL). 모델 교체 전 테스트용"
         type: string
         default: ""
+      debug:
+        description: "Gemini 응답 구조를 로그에 남기고 가드를 끈 채 1회만 수집 (진단용)"
+        type: boolean
+        default: false
 
 jobs:
   send-briefing:
@@ -55,7 +59,8 @@ jobs:
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           MODEL: ${{ inputs.model || vars.MODEL }}
           FALLBACK_MODEL: ${{ vars.FALLBACK_MODEL }}
-          MIN_GROUNDED_LINKS: ${{ vars.MIN_GROUNDED_LINKS }}
+          MIN_GROUNDED_LINKS: ${{ inputs.debug == true && '0' || vars.MIN_GROUNDED_LINKS }}
+          DEBUG_GEMINI_RESPONSE: ${{ inputs.debug == true && '1' || '' }}
           # Jev 선별 모드 (기본 켜짐). Variables에 JEV_SELECT=shadow 를 두면 기록만 하고 메일은 그대로
           JEV_SELECT: ${{ vars.JEV_SELECT }}
           SKIP_EMAIL: ${{ inputs.skip_email == true && '1' || '' }}
