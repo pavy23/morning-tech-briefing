@@ -6,7 +6,8 @@ import { config, categoryKeys, defaultCategory, normalizeCategory, quotasFor } f
 const MODEL = process.env.MODEL || "gemini-2.5-flash";
 // 기본 모델이 503/429 같은 일시적 과부하로 거듭 실패할 때 쓸 백업 모델.
 // (그라운딩 품질은 다소 낮아도 "메일 누락"보다는 낫다. 같은 모델이면 폴백 비활성.)
-const FALLBACK_MODEL = process.env.FALLBACK_MODEL || "gemini-2.5-flash-lite";
+// 2.5-flash-lite는 2026-10-16 Gemini API에서 종료 예정이라 3.5-flash-lite를 기본값으로 둔다.
+const FALLBACK_MODEL = process.env.FALLBACK_MODEL || "gemini-3.5-flash-lite";
 
 // 프롬프트는 설정 파일의 주제·카테고리·개수 배분으로 조립한다 (주제 변경 시 코드 수정 불필요).
 // want: 요청할 건수. Jev 선별이 켜지면 목표(total)보다 많이 받아 재탕·중복을 뺀 자리를 채운다.
@@ -203,15 +204,24 @@ const MIN_ITEMS = Math.max(1, Math.ceil(config.total / 2));
 // 실제 기사 URL로 확정된 링크가 이 개수 미만이면 "그라운딩 누락 배치"로 보고 재시도.
 // 근거: 503 재시도 뒤 성공한 날(예: 2026-09-17)에 Google 검색 없이 모델 기억만으로
 // 만든 일반론·가짜 뉴스 10건이 그대로 발송된 사례가 있었다. 그런 배치는 URL이 전부
-// 환각이라 링크 검증에서 거의 0건만 살아남는다. 정상 배치는 보통 절반 이상 살아남는다.
-// 0으로 두면 가드를 끈다.
-const MIN_GROUNDED_LINKS = Number.isFinite(Number(process.env.MIN_GROUNDED_LINKS))
-  ? Number(process.env.MIN_GROUNDED_LINKS)
-  : 3;
-// 항목 수 부족 또는 일시 오류(503 등) 시 최대 재시도 횟수
-const MAX_FETCH_ATTEMPTS = 5;
-// 기본 모델에서 일시 오류가 이 횟수만큼 누적되면 백업 모델로 전환
-const FALLBACK_AFTER = 2;
+// 환각이라 링크 검증에서 거의 0건만 살아남는다. 정상 배치는 보통 절반 이상 살아남는다
+// (후보 20건 요청 시 정상일 12~16건, 환각일 2~3건 — 2026-09-20~25 로그).
+// 기준값은 요청 건수에 비례한다: 기본 30%, 최소 3건 (10건 요청 → 3, 20건 요청 → 6).
+// MIN_GROUNDED_LINKS 환경변수로 절대 개수를 지정할 수 있고 0이면 가드를 끈다.
+// Actions에서 Variable을 등록하지 않으면 빈 문자열이 들어오는데, Number("")는 0이라
+// 가드가 조용히 꺼졌던 사고가 있었으므로(2026-09-25) 빈 값은 "미설정"으로 취급한다.
+const MIN_GROUNDED_RATIO = 0.3;
+export function minGroundedLinks(want) {
+  const raw = String(process.env.MIN_GROUNDED_LINKS ?? "").trim();
+  if (raw !== "" && Number.isFinite(Number(raw))) return Math.max(0, Number(raw));
+  return Math.max(3, Math.ceil(want * MIN_GROUNDED_RATIO));
+}
+// 항목 수 부족·그라운딩 누락·일시 오류(503 등)를 합쳐 최대 시도 횟수
+const MAX_FETCH_ATTEMPTS = 6;
+// 기본 모델에서 일시 오류가 이 횟수만큼 누적되면 백업 모델로 전환.
+// 503 "high demand"는 보통 수십 초~수 분이면 풀리므로, 2회·10초 만에 넘기던 것을
+// 3회·약 1분(20초→40초 대기) 뒤로 늦춘다. 2026-09-24처럼 약한 모델이 반쪽 결과를 내는 것을 줄인다.
+const FALLBACK_AFTER = 3;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -220,10 +230,20 @@ function isTransient(err) {
   return /\b(429|500|502|503|504)\b/.test(String(err?.message || ""));
 }
 
+// 테스트에서 대기 시간을 줄이기 위한 배율 (운영에서는 미설정 = 1)
+const BACKOFF_SCALE = Number(process.env.FETCH_BACKOFF_SCALE) || 1;
+
 // 지수 백오프 + 지터: 2s, 4s, 8s, 16s ... (상한 20s, ±25% 흔들기로 동시 재시도 분산)
+// 응답은 왔지만 품질이 나쁜 경우(항목 부족, 그라운딩 누락)에 쓴다.
 function backoffMs(attempt) {
   const base = Math.min(2000 * 2 ** (attempt - 1), 20000);
-  return Math.round(base * (0.75 + Math.random() * 0.5));
+  return Math.round(base * (0.75 + Math.random() * 0.5) * BACKOFF_SCALE);
+}
+// 일시 오류(429/5xx) 뒤에는 더 길게 기다린다: 20s, 40s, 60s ... (상한 60s)
+// 과부하는 몇 초 만에 풀리지 않으므로 짧은 재시도는 같은 503만 반복한다.
+function transientBackoffMs(nth) {
+  const base = Math.min(20000 * 2 ** (nth - 1), 60000);
+  return Math.round(base * (0.75 + Math.random() * 0.5) * BACKOFF_SCALE);
 }
 
 // Gemini API 호출 + JSON 파싱만 담당 (링크 변환 제외).
@@ -302,16 +322,24 @@ export async function fetchNews({ want = config.total } = {}) {
   let best = null;
   let lastErr = null;
   let transientFails = 0; // 기본 모델의 누적 일시 오류 수
+  let fallbackBroken = false; // 백업 모델 자체가 실패(잘못된 ID, 할당량 0 등)하면 기본 모델로 복귀
   for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
     // 기본 모델이 일시 오류로 거듭 막히면 백업 모델로 전환해 발송 누락을 막는다.
     const useFallback =
+      !fallbackBroken &&
       transientFails >= FALLBACK_AFTER && FALLBACK_MODEL && FALLBACK_MODEL !== MODEL;
     const model = useFallback ? FALLBACK_MODEL : MODEL;
+    // 백업 모델은 출력이 잘리기 쉽고(2026-09-24: 9건에서 MAX_TOKENS) 그라운딩도 약하므로
+    // 후보를 넉넉히 받는 대신 목표 건수만 요청한다.
+    const askFor = useFallback ? Math.min(want, config.total) : want;
+    const minGrounded = minGroundedLinks(askFor);
+    let waitMs = 0;
     try {
-      const r = await fetchRawItems(apiKey, model, want);
+      const r = await fetchRawItems(apiKey, model, askFor);
       // 링크를 실제 기사 URL로 변환·검증 (만료/404/톱페이지 방지) + 품질 집계
       r.stats = await resolveAllLinks(r.items, r.chunkUris);
       r.model = model;
+      r.minGrounded = minGrounded;
       console.log(
         `[fetch-news] 시도 ${attempt}/${MAX_FETCH_ATTEMPTS} ${model}: ` +
         `항목 ${r.items.length}개, 그라운딩 chunk ${r.chunkUris.length}개, ` +
@@ -322,7 +350,11 @@ export async function fetchNews({ want = config.total } = {}) {
       if (isBetter(r, best)) best = r;
 
       const enoughItems = r.items.length >= MIN_ITEMS;
-      const grounded = r.stats.real >= MIN_GROUNDED_LINKS;
+      // 기본 모델이 그라운딩 chunk를 하나도 안 돌려줬다면 Google 검색이 실행되지 않은 것
+      // (2026-09-25: chunk 0개, 직접 URL 3건이 살아 있어 개수 기준만으로는 통과했던 환각 배치).
+      // 백업 모델은 chunk 없이도 리다이렉트 URL을 주는 경우가 있어 개수 기준만 적용한다.
+      const noSearch = !useFallback && r.chunkUris.length === 0 && minGrounded > 0;
+      const grounded = r.stats.real >= minGrounded && !noSearch;
       if (enoughItems && grounded) break; // 충분히 모이고 근거도 있으면 종료
 
       if (!enoughItems) {
@@ -330,21 +362,47 @@ export async function fetchNews({ want = config.total } = {}) {
           `[fetch-news] ${model}: ${r.items.length}개만 수집됨(finishReason: ${r.finishReason}). ` +
           `재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}`
         );
+      } else if (noSearch) {
+        console.error(
+          `[fetch-news] ${model}: 그라운딩 chunk 0개 — Google 검색 미실행(환각 배치) 의심 → ` +
+          `재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}`
+        );
       } else {
         console.error(
-          `[fetch-news] ${model}: 실제 기사 링크가 ${r.stats.real}개뿐(최소 ${MIN_GROUNDED_LINKS}개). ` +
+          `[fetch-news] ${model}: 실제 기사 링크가 ${r.stats.real}개뿐(최소 ${minGrounded}개). ` +
           `Google 검색 그라운딩 누락(환각 배치) 의심 → 재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}`
         );
       }
+      waitMs = backoffMs(attempt);
     } catch (e) {
       lastErr = e;
-      if (isTransient(e) && !useFallback) transientFails++;
-      console.error(
-        `[fetch-news] ${model} 호출 실패: ${e.message} (재시도 ${attempt}/${MAX_FETCH_ATTEMPTS})`
-      );
+      if (useFallback) {
+        // 백업 모델이 실패하면 남은 시도는 기본 모델로 (모델 ID 오류·할당량 0 등은 재시도해도 같다)
+        fallbackBroken = true;
+        console.error(
+          `[fetch-news] 백업 모델 ${model} 호출 실패: ${e.message} → 기본 모델 ${MODEL}로 복귀 ` +
+          `(재시도 ${attempt}/${MAX_FETCH_ATTEMPTS})`
+        );
+        waitMs = transientBackoffMs(transientFails);
+      } else if (isTransient(e)) {
+        transientFails++;
+        console.error(
+          `[fetch-news] ${model} 호출 실패: ${e.message} (재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}, ` +
+          `일시 오류 ${transientFails}/${FALLBACK_AFTER}회 — 이후 백업 모델 전환)`
+        );
+        // 다음 시도가 백업 모델이면 기다릴 이유가 없다 (다른 모델의 용량)
+        const switching = transientFails >= FALLBACK_AFTER && FALLBACK_MODEL && FALLBACK_MODEL !== MODEL;
+        waitMs = switching ? 0 : transientBackoffMs(transientFails);
+      } else {
+        console.error(
+          `[fetch-news] ${model} 호출 실패: ${e.message} (재시도 ${attempt}/${MAX_FETCH_ATTEMPTS})`
+        );
+        waitMs = backoffMs(attempt);
+      }
     }
-    if (attempt < MAX_FETCH_ATTEMPTS) {
-      await sleep(backoffMs(attempt));
+    if (attempt < MAX_FETCH_ATTEMPTS && waitMs > 0) {
+      console.log(`[fetch-news] ${Math.round(waitMs / 1000)}초 대기 후 재시도`);
+      await sleep(waitMs);
     }
   }
 
@@ -352,9 +410,9 @@ export async function fetchNews({ want = config.total } = {}) {
   if (best.items.length < MIN_ITEMS) {
     console.error(`[fetch-news] 재시도 후에도 ${best.items.length}개만 확보. 그대로 발송합니다.`);
   }
-  if (best.stats.real < MIN_GROUNDED_LINKS) {
+  if (best.stats.real < best.minGrounded) {
     console.error(
-      `[fetch-news] 재시도 후에도 실제 기사 링크 ${best.stats.real}개뿐. ` +
+      `[fetch-news] 재시도 후에도 실제 기사 링크 ${best.stats.real}개뿐(최소 ${best.minGrounded}개). ` +
       `근거 불충분한 배치일 수 있으나 발송 누락보다는 낫다고 보고 그대로 발송합니다.`
     );
   }
