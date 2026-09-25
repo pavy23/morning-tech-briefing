@@ -80,6 +80,112 @@ function parseNewsJSON(raw) {
   return { items };
 }
 
+// ─── 목록 형식 (Gemini 3.x용) ───────────────────────────────────────────
+// Gemini 3.x는 JSON 출력을 요구하면(프롬프트 문장으로만 요구해도) Google 검색 그라운딩을
+// 조용히 끄고 groundingMetadata를 돌려주지 않는다 (google-gemini/cookbook#1274, 2026-06;
+// 이 저장소 실측 2026-09-25: gemini-3.6-flash 6회 모두 chunk 0개).
+// 그래서 3.x에는 산문에 가까운 번호 목록으로 받고, 출처 URL은 모델이 쓰게 하지 않고
+// groundingSupports(문장 ↔ 출처 chunk 매핑)에서 코드로 붙인다.
+export function buildListPrompt(cfg = config, want = cfg.total) {
+  const quota = quotasFor(want, cfg).map((q) => `${q.key} ${q.count}개`).join(", ");
+  const allowed = cfg.categories.map((c) => c.key).join(", ");
+  return `당신은 글로벌 테크 뉴스 에디터입니다.
+Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.searchScope} 가장 중요한 글로벌 주요 뉴스 ${want}건을 찾아, 각 뉴스를 아래 형식의 항목으로 정리하세요.
+
+### 1
+카테고리: ${cfg.categories[0].key}
+헤드라인: 한국어 헤드라인 (60자 이내)
+요약: 핵심 내용 요약 (100~150자 한국어). 검색으로 확인한 사실만 쓰고, 기사에 있는 구체적 수치·고유명사를 포함하세요.
+출처: 출처 언론사명
+중요도: high
+
+규칙:
+- 총 ${want}개: ${quota} 권장
+- 카테고리는 반드시 ${allowed} 중 하나
+- 중요도는 high 또는 medium
+- 각 항목은 "### 번호"로 시작하고, 위 다섯 줄만 씁니다. 머리말·맺음말·표는 쓰지 않습니다.
+- 서로 다른 뉴스여야 하며, 같은 사건을 두 번 넣지 않습니다.`;
+}
+
+// "### N" 블록을 항목으로 파싱. 각 항목의 원문 내 위치(start/end)를 함께 돌려주어
+// groundingSupports의 문장 위치와 대조할 수 있게 한다.
+function parseNewsList(raw) {
+  const text = String(raw || "");
+  const re = /^\s*#{1,4}\s*(\d+)\s*[.)]?\s*$/gm;
+  const heads = [];
+  let m;
+  while ((m = re.exec(text))) heads.push({ id: Number(m[1]), start: m.index, bodyStart: m.index + m[0].length });
+  if (heads.length === 0) throw new Error("목록 항목(### N)을 찾을 수 없습니다");
+  const items = [];
+  for (let i = 0; i < heads.length; i++) {
+    const end = i + 1 < heads.length ? heads[i + 1].start : text.length;
+    const body = text.slice(heads[i].bodyStart, end);
+    const field = (label) => {
+      const fm = body.match(new RegExp(`^\\s*[-*]?\\s*\\**${label}\\**\\s*[:：]\\s*(.+?)\\s*$`, "m"));
+      return fm ? fm[1].replace(/\*\*/g, "").trim() : "";
+    };
+    const headline = field("헤드라인");
+    if (!headline) continue; // 잘린 마지막 블록 등
+    items.push({
+      id: heads[i].id,
+      category: field("카테고리"),
+      headline,
+      summary: field("요약"),
+      source: field("출처"),
+      importance: /medium/i.test(field("중요도")) ? "medium" : "high",
+      url: null,
+      _start: heads[i].start,
+      _end: end,
+    });
+  }
+  if (items.length === 0) throw new Error("복구 가능한 뉴스 항목이 없습니다");
+  return { items };
+}
+
+// groundingSupports: [{ segment: { startIndex, endIndex, text }, groundingChunkIndices: [..] }]
+// 각 support의 문장이 어느 항목 블록 안에 있는지 찾아, 그 항목에 chunk 인덱스를 모은다.
+// 항목의 url은 가장 많이 인용된 chunk의 URI(vertexaisearch 리다이렉트)로 둔다.
+// segment.startIndex는 UTF-8 바이트 오프셋이라 한국어에서는 문자 인덱스와 다르므로
+// 우선 segment.text로 위치를 찾고, 없을 때만 바이트→문자 변환을 쓴다.
+function attachGroundingSources(items, text, groundingMetadata) {
+  const supports = groundingMetadata?.groundingSupports || [];
+  const chunks = groundingMetadata?.groundingChunks || [];
+  const votes = new Map(); // item index -> Map(chunkIdx -> count)
+  const byteToChar = (b) => Buffer.from(text, "utf8").subarray(0, b).toString("utf8").length;
+  for (const sp of supports) {
+    const seg = sp?.segment || {};
+    const idxs = sp?.groundingChunkIndices || [];
+    if (idxs.length === 0) continue;
+    let pos = seg.text ? text.indexOf(seg.text) : -1;
+    if (pos === -1 && Number.isFinite(seg.startIndex)) pos = byteToChar(seg.startIndex);
+    if (pos === -1) continue;
+    const i = items.findIndex((it) => pos >= it._start && pos < it._end);
+    if (i === -1) continue;
+    const v = votes.get(i) || new Map();
+    for (const ci of idxs) v.set(ci, (v.get(ci) || 0) + 1);
+    votes.set(i, v);
+  }
+  let attached = 0;
+  items.forEach((it, i) => {
+    const v = votes.get(i);
+    if (v && v.size) {
+      const best = [...v.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      const uri = chunks[best]?.web?.uri;
+      if (uri) { it.url = uri; attached++; }
+    }
+    delete it._start;
+    delete it._end;
+  });
+  return attached;
+}
+
+// 모델 세대별 출력 형식. NEWS_FORMAT=json|list 로 강제할 수 있다.
+export function outputFormatFor(model) {
+  const forced = String(process.env.NEWS_FORMAT || "").trim().toLowerCase();
+  if (forced === "json" || forced === "list") return forced;
+  return /^gemini-3/.test(model) ? "list" : "json";
+}
+
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
 // 헤드라인으로 Google 뉴스 검색 (해당 기사가 결과 맨 위에 뜸) — 절대 죽지 않는 폴백
@@ -250,7 +356,8 @@ function transientBackoffMs(nth) {
 // { items, chunkUris, finishReason } 반환. 실패 시 throw.
 async function fetchRawItems(apiKey, model = MODEL, want = config.total) {
   const todayKst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
-  const PROMPT = buildPrompt(config, want);
+  const format = outputFormatFor(model);
+  const PROMPT = format === "list" ? buildListPrompt(config, want) : buildPrompt(config, want);
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -267,10 +374,9 @@ async function fetchRawItems(apiKey, model = MODEL, want = config.total) {
         tools: [{ google_search: {} }],
         generationConfig: {
           temperature: 0.3,
-          // 2.5-flash는 thinking에 ~2700토큰을 쓰므로 8192면 그날 thinking/요약이
-          // 길 때 JSON이 잘림(MAX_TOKENS) → 항목 1~2개만 복구됨.
-          // 16384로 올려 10개 항목이 온전히 출력될 여유를 확보.
-          maxOutputTokens: 16384,
+          // thinking 토큰도 이 한도에 포함된다. 2.5-flash는 ~2,700토큰, 3.6-flash는
+          // ~9,000토큰을 thinking에 쓰므로(2026-09-25 실측 13.8k 합계) 16384면 잘릴 수 있다.
+          maxOutputTokens: 32768,
         },
       }),
     }
@@ -312,7 +418,7 @@ async function fetchRawItems(apiKey, model = MODEL, want = config.total) {
     throw new Error(`Gemini 텍스트 응답 없음. finishReason: ${reason}`);
   }
 
-  const parsed = parseNewsJSON(text);
+  const parsed = format === "list" ? parseNewsList(text) : parseNewsJSON(text);
 
   if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
     throw new Error("뉴스 항목을 가져오지 못했습니다");
@@ -322,7 +428,15 @@ async function fetchRawItems(apiKey, model = MODEL, want = config.total) {
     .map((c) => c?.web?.uri)
     .filter(Boolean);
 
-  return { items: parsed.items, chunkUris, finishReason: candidate.finishReason || "unknown" };
+  if (format === "list") {
+    const attached = attachGroundingSources(parsed.items, text, candidate.groundingMetadata);
+    console.log(
+      `[fetch-news] 목록 형식: 항목 ${parsed.items.length}개, ` +
+      `groundingSupports ${candidate.groundingMetadata?.groundingSupports?.length ?? 0}개 → 출처 붙은 항목 ${attached}개`
+    );
+  }
+
+  return { items: parsed.items, chunkUris, finishReason: candidate.finishReason || "unknown", format };
 }
 
 // want: Gemini에 요청할 건수 (기본 config.total). 선별 단계가 있으면 config.candidates를 넘긴다.
@@ -357,7 +471,7 @@ export async function fetchNews({ want = config.total } = {}) {
       r.model = model;
       r.minGrounded = minGrounded;
       console.log(
-        `[fetch-news] 시도 ${attempt}/${MAX_FETCH_ATTEMPTS} ${model}: ` +
+        `[fetch-news] 시도 ${attempt}/${MAX_FETCH_ATTEMPTS} ${model} (${r.format}): ` +
         `항목 ${r.items.length}개, 그라운딩 chunk ${r.chunkUris.length}개, ` +
         `실제 기사 링크 ${r.stats.real}/${r.stats.total} ` +
         `(리다이렉트 복원 ${r.stats.grounded}, 직접 URL ${r.stats.direct}, 검색 폴백 ${r.stats.fallback}), ` +
