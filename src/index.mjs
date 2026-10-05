@@ -1,7 +1,7 @@
 // src/index.mjs
 // 메인 엔트리: 뉴스 수집 → 이메일 HTML 생성 → 발송
 
-import { fetchNews } from "./fetch-news.mjs";
+import { fetchNews, FALLBACK_REASON_LABEL } from "./fetch-news.mjs";
 import { buildEmailHTML, buildEmailText, buildSubject } from "./email-template.mjs";
 import { sendEmail } from "./send-email.mjs";
 import { isJudgeEnabled, runShadowJudgments, formatShadowReport } from "./judge.mjs";
@@ -66,6 +66,17 @@ async function main() {
   news.items.forEach((it, i) => {
     console.log(`  (c${String(i + 1).padStart(2, "0")}) [${it.category}] ${it.headline}${LINK_TAG[it.linkStatus] ?? ""}`);
   });
+  // 검색 대체 링크가 된 후보마다 사유, 기사로 인정하지 못한 주소, 메일에 들어갈 검색어를 남긴다.
+  // 같은 사유가 반복되면(예: 특정 사이트의 영상·섹션 페이지) 기사 판별 규칙을 손볼 근거가 된다.
+  const fallbacks = news.items.map((it, i) => ({ it, i })).filter(({ it }) => it.linkStatus === "fallback");
+  if (fallbacks.length > 0) {
+    console.log(`[link] 검색 대체 링크 ${fallbacks.length}건 (사유 | 원래 주소 | 검색어)`);
+    for (const { it, i } of fallbacks) {
+      const f = it.linkFallback || {};
+      const label = FALLBACK_REASON_LABEL[f.reason] || f.reason || "사유 미상";
+      console.log(`  (c${String(i + 1).padStart(2, "0")}) ${label} | ${f.detail || "-"} | ${f.query || "-"}`);
+    }
+  }
   console.log("");
 
   // 2. TypeSafe(Jev) 판정 → 선별. 판정 실패 시 기존 방식(앞에서 total건)으로 폴백해 발송은 지킨다.

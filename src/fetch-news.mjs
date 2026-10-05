@@ -28,7 +28,8 @@ Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.
       "summary": "핵심 내용 요약 (100~150자 한국어)",
       "source": "출처 언론사명",
       "importance": "high",
-      "url": "https://원본기사URL"
+      "url": "https://원본기사URL",
+      "keywords": "원문 기사를 다시 찾을 핵심 키워드 3~4개"
     }
   ]
 }
@@ -38,6 +39,7 @@ Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.
 - category는 반드시 ${allowed} 중 하나
 - importance는 "high" 또는 "medium"
 - url은 반드시 https://로 시작하는 실제 기사 URL
+- keywords는 원문 기사 제목에 나오는 회사·제품·인물 같은 고유명사 위주 3~4개 단어, 원문 기사의 언어 그대로 (영어 기사면 영어)
 - summary는 150자 이내, 한국어로 작성
 - 순수 JSON만 출력`;
 }
@@ -97,13 +99,14 @@ Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.
 헤드라인: 한국어 헤드라인 (60자 이내)
 요약: 핵심 내용 요약 (100~150자 한국어). 검색으로 확인한 사실만 쓰고, 기사에 있는 구체적 수치·고유명사를 포함하세요.
 출처: 출처 언론사명
+검색어: 원문 기사를 다시 찾을 수 있는 키워드 3~4개. 원문 기사 제목에 나오는 회사·제품·인물 같은 고유명사 위주로, 원문 기사의 언어 그대로 씁니다 (영어 기사면 영어).
 중요도: high
 
 규칙:
 - 총 ${want}개: ${quota} 권장
 - 카테고리는 반드시 ${allowed} 중 하나
 - 중요도는 high 또는 medium
-- 각 항목은 "### 번호"로 시작하고, 위 다섯 줄만 씁니다. 머리말·맺음말·표는 쓰지 않습니다.
+- 각 항목은 "### 번호"로 시작하고, 위 여섯 줄만 씁니다. 머리말·맺음말·표는 쓰지 않습니다.
 - 서로 다른 뉴스여야 하며, 같은 사건을 두 번 넣지 않습니다.`;
 }
 
@@ -132,6 +135,7 @@ function parseNewsList(raw) {
       headline,
       summary: field("요약"),
       source: field("출처"),
+      keywords: field("검색어"),
       importance: /medium/i.test(field("중요도")) ? "medium" : "high",
       url: null,
       _start: heads[i].start,
@@ -188,9 +192,51 @@ export function outputFormatFor(model) {
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
-// 헤드라인으로 Google 뉴스 검색 (해당 기사가 결과 맨 위에 뜸) — 절대 죽지 않는 폴백
-function newsSearchLink(headline) {
-  return `https://news.google.com/search?q=${encodeURIComponent(headline || "")}&hl=ko&gl=KR&ceid=KR:ko`;
+// 모델이 준 검색어를 검색창에 넣기 좋은 형태로 정리한다. 쓸 수 없으면 빈 문자열.
+// 괄호 속 설명("(영어)" 같은 주석)과 따옴표·구분 기호를 지우고 공백으로 이어 붙인다.
+export function cleanKeywords(raw) {
+  let s = String(raw ?? "")
+    .replace(/\([^)]*\)|（[^）]*）/g, " ")
+    .replace(/[`"“”‘’«»<>\[\]{}*]/g, " ")
+    .replace(/[,;|/·、，]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!s || /https?:|www\./i.test(s)) return "";
+  if (s.length > 100) s = s.slice(0, 100).replace(/\s+\S*$/, "");
+  return s;
+}
+
+// 원문 주소를 확인하지 못한 기사에 붙이는 대체 링크: Google 검색의 뉴스 탭.
+// 검색어는 모델이 준 원문 키워드를 쓰고, 없을 때만 한국어 헤드라인을 쓴다.
+// 예전에는 news.google.com 검색에 한국어 헤드라인 전체를 넣었는데 두 가지 문제가 있었다
+// (2026-10-05 점검, 최근 10일 대체 링크 9건):
+//  - 모델이 영어 기사를 옮겨 쓴 문장이라 같은 표현의 기사가 없어 9건 중 4건이 결과 0건
+//    (같은 사건을 키워드 "테슬라 옵티머스 기가 텍사스"로 찾으면 44건)
+//  - 모바일에서 "콘텐츠를 찾을 수 없습니다"가 떴다는 사용자 보고. 안드로이드에서는 Google 뉴스 앱이
+//    news.google.com 링크를 여는 검증된 앱으로 등록돼 있어(news.google.com/.well-known/assetlinks.json)
+//    검색 링크가 앱으로 열린 것으로 보인다. google.com 검색 링크는 이 등록과 무관하다.
+export function newsSearchLink(headline, keywords) {
+  const q = cleanKeywords(keywords) || String(headline ?? "").trim();
+  return `https://www.google.com/search?q=${encodeURIComponent(q)}&tbm=nws&hl=ko`;
+}
+
+// 대체 링크가 된 사유 (로그와 판정 리포트용)
+export const FALLBACK_REASON_LABEL = {
+  "no-source": "출처 연결 안 됨",
+  "redirect-failed": "출처 주소 확인 실패",
+  "not-article": "기사 주소 아님",
+  "dead": "직접 URL 접속 실패",
+};
+
+// 로그용 짧은 주소: 호스트 + 경로 (쿼리 제외)
+function shortUrl(u) {
+  try {
+    const x = new URL(u);
+    const s = x.hostname.replace(/^www\./, "") + x.pathname;
+    return s.length > 70 ? s.slice(0, 67) + "..." : s;
+  } catch {
+    return String(u).slice(0, 70);
+  }
 }
 
 // URL이 (톱/섹션 페이지가 아니라) 개별 기사로 보이는지 휴리스틱 판별
@@ -263,28 +309,31 @@ async function isAlive(url) {
 // 모델이 주는 url은 (1) Google 그라운딩 리다이렉트(만료되면 404, 톱페이지로 풀리기도 함)
 // 또는 (2) 환각으로 만든 가짜 주소인 경우가 많다.
 // → 수집 시점에 발행처의 실제 "기사" URL로 변환하고, 기사로 보이지 않으면
-//   헤드라인 Google 뉴스 검색 링크로 폴백한다(클릭 시 해당 기사가 맨 위에 노출).
+//   검색 대체 링크(newsSearchLink)로 바꾼다.
 //
-// 반환: { url, status }
+// 반환: { url, status, reason?, detail? }
 //   status = "grounded" : 그라운딩 리다이렉트 → 발행처 실제 기사 URL로 복원됨
 //            "direct"   : 모델 직접 URL이 기사 형태이고 실제 접속됨
-//            "fallback" : 실패 → Google 뉴스 검색 링크
-async function resolveLink(rawUrl, headline, chunkUris) {
-  const fallback = { url: newsSearchLink(headline), status: "fallback" };
-  if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return fallback;
+//            "fallback" : 실패 → 검색 대체 링크. reason은 FALLBACK_REASON_LABEL의 키,
+//                         detail은 기사로 인정하지 못한 주소(있을 때)
+async function resolveLink(rawUrl, headline, chunkUris, keywords) {
+  const fallback = (reason, detail = "") =>
+    ({ url: newsSearchLink(headline, keywords), status: "fallback", reason, detail });
+  if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return fallback("no-source");
 
   if (rawUrl.includes("vertexaisearch.cloud.google.com")) {
     // 모델이 잘라먹은 URL을 정식 chunk URL로 복원한 뒤 발행처 기사 URL 추출
     const canonical = canonicalizeVertex(rawUrl, chunkUris);
     const real = await unwrapRedirect(canonical);
-    if (!real) return fallback;
-    // 발행처 기사 URL이면 사용, 톱/섹션 페이지면 기사 검색으로 폴백
-    return isLikelyArticle(real) ? { url: real, status: "grounded" } : fallback;
+    if (!real) return fallback("redirect-failed");
+    // 발행처 기사 URL이면 사용, 톱/섹션/영상 페이지 등이면 검색 대체 링크
+    return isLikelyArticle(real) ? { url: real, status: "grounded" } : fallback("not-article", shortUrl(real));
   }
 
   // 그라운딩이 아닌 모델 직접 URL: 기사 형태 + 실제 접속 가능할 때만 사용
-  if (isLikelyArticle(rawUrl) && (await isAlive(rawUrl))) return { url: rawUrl, status: "direct" };
-  return fallback;
+  if (!isLikelyArticle(rawUrl)) return fallback("not-article", shortUrl(rawUrl));
+  if (await isAlive(rawUrl)) return { url: rawUrl, status: "direct" };
+  return fallback("dead", shortUrl(rawUrl));
 }
 
 // 모든 항목의 링크를 변환하고, 각 항목에 linkStatus를 기록한 뒤 집계를 반환.
@@ -293,9 +342,14 @@ async function resolveLink(rawUrl, headline, chunkUris) {
 async function resolveAllLinks(items, chunkUris) {
   await Promise.all(
     items.map(async (it) => {
-      const { url, status } = await resolveLink(it.url, it.headline, chunkUris);
+      const { url, status, reason, detail } = await resolveLink(it.url, it.headline, chunkUris, it.keywords);
       it.url = url;
       it.linkStatus = status;
+      if (status === "fallback") {
+        it.linkFallback = { reason, detail, query: cleanKeywords(it.keywords) || it.headline };
+      } else {
+        delete it.linkFallback;
+      }
     })
   );
   const count = (s) => items.filter((it) => it.linkStatus === s).length;
@@ -423,6 +477,8 @@ async function fetchRawItems(apiKey, model = MODEL, want = config.total) {
   if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
     throw new Error("뉴스 항목을 가져오지 못했습니다");
   }
+  // 검색 대체 링크용 키워드 정리 (JSON은 배열로 줄 수도 있어 문자열로 통일)
+  for (const it of parsed.items) it.keywords = cleanKeywords(it.keywords);
 
   const chunkUris = (candidate.groundingMetadata?.groundingChunks || [])
     .map((c) => c?.web?.uri)
@@ -432,7 +488,8 @@ async function fetchRawItems(apiKey, model = MODEL, want = config.total) {
     const attached = attachGroundingSources(parsed.items, text, candidate.groundingMetadata);
     console.log(
       `[fetch-news] 목록 형식: 항목 ${parsed.items.length}개, ` +
-      `groundingSupports ${candidate.groundingMetadata?.groundingSupports?.length ?? 0}개 → 출처 붙은 항목 ${attached}개`
+      `groundingSupports ${candidate.groundingMetadata?.groundingSupports?.length ?? 0}개 → 출처 붙은 항목 ${attached}개, ` +
+      `검색어 있는 항목 ${parsed.items.filter((it) => it.keywords).length}개`
     );
   }
 
