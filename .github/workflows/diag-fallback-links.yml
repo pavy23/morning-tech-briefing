@@ -23,83 +23,28 @@ jobs:
         shell: bash
         run: |
           cat > diag.mjs <<'EOF'
-          const DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
-          const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
-          const ANDROID = "Mozilla/5.0 (Linux; Android 15; SM-S928N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36";
-
-          // 2026-09-26 ~ 10-05 발송분 중 '검색폴백'으로 나간 헤드라인 9건 (실행 로그 그대로)
-          const HEADLINES = [
-            "테슬라, 기가 텍사스서 3세대 옵티머스 주당 1,000대 양산 체제 구축",
-            "앤트로픽, 클로드 코드용 타입스크립트 에이전트 훅 출시",
-            "구글, 고성능 플래그십 AI 모델 '제미나이 4 아르곤' 공개",
-            "앤스로픽, 속도 30% 향상된 '클로드 소넷 5.5' 전격 출시",
-            "영국 AI 안전연구소, GPT-6 아스트라의 공급망 공격 위험 경고",
-            "제임스 웹 망원경, 중력 렌즈로 은하단 뒤 숨은 무수 은하 발견",
-            "오픈AI, 에이전트 무단 접근 사건으로 최신 모델 훈련 일시 중단",
-            "OpenAI, ChatGPT Voice 기능 대폭 강화… GPT-6 모델 선택 지원",
-            "딥시크, 연간 매출 10억 달러 돌파… 75억 달러 규모 투자 유치 추진",
-          ];
-          const enc = encodeURIComponent;
-          // src/fetch-news.mjs newsSearchLink() 와 동일한 형식
-          const gnSearch = (q) => `https://news.google.com/search?q=${enc(q)}&hl=ko&gl=KR&ceid=KR:ko`;
-          const gnRss = (q) => `https://news.google.com/rss/search?q=${enc(q)}&hl=ko&gl=KR&ceid=KR:ko`;
-
-          async function get(url, ua) {
+          // 2차: 앱 링크 선언 파일 전체 확인 (1차는 출력 길이 제한으로 잘림)
+          const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
+          async function get(u) {
+            const r = await fetch(u, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(15000) });
+            return { status: r.status, text: await r.text() };
+          }
+          const a = await get("https://news.google.com/.well-known/assetlinks.json");
+          console.log(`assetlinks.json -> ${a.status}`);
+          try {
+            for (const s of JSON.parse(a.text)) console.log(`  android: ${s.target?.package_name} | ${s.relation?.join(",")}`);
+          } catch { console.log(a.text.slice(0, 1500)); }
+          for (const u of ["https://news.google.com/.well-known/apple-app-site-association", "https://news.google.com/apple-app-site-association"]) {
+            const r = await get(u);
+            console.log(`\n${u} -> ${r.status} (${r.text.length} bytes)`);
             try {
-              const r = await fetch(url, { redirect: "follow", headers: { "User-Agent": ua, "Accept-Language": "ko-KR,ko;q=0.9" }, signal: AbortSignal.timeout(15000) });
-              const text = await r.text();
-              return { status: r.status, finalUrl: r.url, text };
-            } catch (e) {
-              return { status: "ERR " + e.message, finalUrl: "", text: "" };
-            }
+              const j = JSON.parse(r.text);
+              for (const d of j.applinks?.details || []) {
+                const paths = d.paths || (d.components || []).map((c) => (c.exclude ? "NOT " : "") + (c["/"] || ""));
+                const ids = d.appID || (d.appIDs || []).join(",");
+                console.log(`  ios: ${ids} | /search 포함=${paths.includes("/search")} | paths=${paths.join(" ")}`);
+              }
+            } catch (e) { console.log("parse error", e.message, r.text.slice(-400)); }
           }
-          const count = (s, re) => (s.match(re) || []).length;
-          const PHRASES = ["콘텐츠를 찾을 수 없습니다", "검색결과가 없습니다", "결과가 없습니다", "일치하는 결과", "No results", "찾을 수 없"];
-          const phrasesIn = (s) => PHRASES.filter((p) => s.includes(p));
-
-          console.log("=== 1) 앱 링크 선언 (어떤 news.google.com 경로를 앱이 가로채는가)");
-          for (const u of [
-            "https://news.google.com/.well-known/assetlinks.json",
-            "https://news.google.com/.well-known/apple-app-site-association",
-            "https://news.google.com/apple-app-site-association",
-          ]) {
-            const r = await get(u, DESKTOP);
-            console.log(`\n--- ${u} -> ${r.status} (${r.text.length} bytes)`);
-            console.log(r.text.slice(0, 2500));
-          }
-
-          console.log("\n=== 2) 폴백 헤드라인별: Google 뉴스 검색 결과 수 (RSS = 웹 검색과 같은 결과 목록)");
-          for (const h of HEADLINES) {
-            const rss = await get(gnRss(h), DESKTOP);
-            const items = count(rss.text, /<item>/g);
-            const titles = [...rss.text.matchAll(/<item>.*?<title>(.*?)<\/title>.*?<pubDate>(.*?)<\/pubDate>/gs)].slice(0, 2).map((m) => `${m[1].slice(0, 70)} | ${m[2]}`);
-            console.log(`\n[${items}건] ${h}`);
-            for (const t of titles) console.log(`    - ${t}`);
-          }
-
-          console.log("\n=== 3) 테슬라 헤드라인 검색 링크를 브라우저별로 열었을 때");
-          const tesla = HEADLINES[0];
-          for (const [name, ua] of [["PC Chrome", DESKTOP], ["iPhone Safari", IPHONE], ["Android Chrome", ANDROID]]) {
-            const r = await get(gnSearch(tesla), ua);
-            const read = count(r.text, /\.\/read\//g), art = count(r.text, /\.\/articles\//g), tags = count(r.text, /<article/g);
-            console.log(`${name}: HTTP ${r.status}, 최종 URL ${r.finalUrl.slice(0, 120)}, 크기 ${r.text.length}, 기사링크 read=${read} articles=${art} <article>=${tags}, 문구=${JSON.stringify(phrasesIn(r.text))}`);
-          }
-
-          console.log("\n=== 4) 대안 폴백 후보: 짧은 키워드 / 네이버 뉴스 / 구글 뉴스탭");
-          const keywordVariants = [
-            "테슬라 옵티머스 기가 텍사스",
-            "Tesla Optimus Giga Texas",
-          ];
-          for (const k of keywordVariants) {
-            const rss = await get(gnRss(k), DESKTOP);
-            console.log(`Google 뉴스 RSS [${count(rss.text, /<item>/g)}건] ${k}`);
-          }
-          for (const h of HEADLINES.slice(0, 4)) {
-            const nv = await get(`https://m.search.naver.com/search.naver?where=m_news&query=${enc(h)}`, ANDROID);
-            const nvCount = count(nv.text, /n\.news\.naver\.com|news_tit|news_link/g);
-            console.log(`네이버 모바일 뉴스: HTTP ${nv.status}, 기사 링크 흔적 ${nvCount}, 문구=${JSON.stringify(phrasesIn(nv.text))} | ${h}`);
-          }
-          const g = await get(`https://www.google.com/search?q=${enc(tesla)}&tbm=nws&hl=ko`, ANDROID);
-          console.log(`구글 검색 뉴스탭(모바일 UA): HTTP ${g.status}, 최종 URL ${g.finalUrl.slice(0, 100)}, 크기 ${g.text.length}`);
           EOF
           node diag.mjs
