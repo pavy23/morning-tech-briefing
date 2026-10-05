@@ -112,9 +112,11 @@ model made up. So `fetch-news.mjs` does the following **at collection time**:
 
 1. Restores truncated redirect URLs by matching them against the canonical `groundingChunks` URLs
 2. Resolves them to the **publisher's real article URL** (a permanent link)
-3. Falls back to a **Google News search for the headline** when the result is a front page, a section page or a dead link (the article is the top result)
+3. When the result is a front page, a section page, a video page or a dead link, the card gets a **Google Search (News tab) link built from 3–4 keywords the model gives for each story**, in the language of the original article, and its button reads "🔎 관련 기사 검색" (search related coverage) instead of "🔗 원문 보기" (open article)
 
-→ "🔗 원문 보기" in the email is always a live link and usually opens the article itself.
+→ Most cards open the article itself, and every link in the email is live. The search link used to be a Google News search for the full Korean headline. A check on 2026-10-05 found that 4 of the 9 such links sent in the previous ten days returned nothing, because the headline is the model's Korean rewrite of an English story, while the same event searched by keywords returned 44 stories. On phones they also ended in "콘텐츠를 찾을 수 없습니다" (content not found); on Android, news.google.com links are registered to open in the Google News app.
+
+Every search link is logged in a `[link]` block with the reason (no source attached / source address could not be resolved / not an article address / direct URL unreachable), the address that was rejected and the keywords used.
 
 ### 🛡 Hallucinated-batch guard
 
@@ -381,6 +383,10 @@ Free-tier limits vary by model and date; check the Google AI Studio pricing page
   `그라운딩 누락(환각 배치) 의심 → 재시도` (suspected hallucinated batch → retry) means the guard fired
 - If it still failed after 6 attempts and sent anyway, the log ends with a `재시도 후에도 실제 기사 링크 N개뿐` warning → re-run manually
 - If real news keeps triggering retries every day, lower `MIN_GROUNDED_LINKS` (see how many real links a normal day has)
+
+**The email often shows "🔎 관련 기사 검색" instead of "🔗 원문 보기"**
+- Those stories had no article address that could be confirmed. Check the `[link]` block in the Actions log: if one reason and one site keep repeating (for example `기사 주소 아님 | youtube.com/watch`), adjust `isLikelyArticle()` in `src/fetch-news.mjs`
+- Measured 2026-09-26 to 10-05: 0–6 of the 20 candidates a day, 0–3 of the 10 stories sent
 
 **The `[select]` line often shows "미사용 0건" (0 unused)**
 - Not enough candidates survive after removing repeats and generic items. Raise `candidates` in `briefing.config.json` to 25–30

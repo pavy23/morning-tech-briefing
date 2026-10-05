@@ -193,6 +193,7 @@ export async function runShadowJudgments(items, previous, { fetch: fetchImpl } =
     source: it.source,
     url: it.url,
     linkStatus: it.linkStatus,
+    linkFallback: it.linkFallback, // 검색 대체 링크일 때만: { reason, detail, query }
     gemini_importance: it.importance,
     relevance: {
       score: perItem[index].relevance.score,
