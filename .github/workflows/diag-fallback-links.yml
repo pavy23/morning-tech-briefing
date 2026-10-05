@@ -1,4 +1,4 @@
-# TEMPORARY diagnostic: checks the new fallback link target (Google Search News tab). Removed right after.
+# TEMPORARY diagnostic: renders the new fallback link (Google Search News tab) in headless Chromium. Removed right after.
 name: diag fallback links (temporary)
 on:
   push:
@@ -9,41 +9,48 @@ permissions:
 jobs:
   diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Probe Google Search News-tab links
+      - name: Render Google Search News-tab links
         shell: bash
         run: |
-          cat > diag.mjs <<'EOF'
-          const UAS = {
-            "PC Chrome": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36",
-            "Android Chrome": "Mozilla/5.0 (Linux; Android 15; SM-S928N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36",
-            "iPhone Safari": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
-          };
-          // 오늘 실제 실행(#131)에서 나온 검색어 + 10/05 테슬라 기사를 키워드로 바꾼 경우
-          const QUERIES = [
-            ["Anthropic 100 million enterprise AI talent engineers Claude", ["Anthropic"]],
-            ["Tesla Optimus Giga Texas", ["Optimus"]],
-          ];
+          mkdir -p probe && cd probe
+          npm init -y >/dev/null
+          npm i -s playwright@1.48.2 >/dev/null
+          npx -y playwright@1.48.2 install chromium >/dev/null
+          cat > probe.mjs <<'EOF'
+          import { chromium, devices } from "playwright";
+          const QUERIES = ["Anthropic 100 million enterprise AI talent engineers Claude", "Tesla Optimus Giga Texas"];
           const link = (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}&tbm=nws&hl=ko`;
-          const MARKERS = ["unusual traffic", "sorry/index", "enablejs", "검색결과가 없습니다", "did not match any", "일치하는 검색결과가 없습니다"];
-          for (const [q, terms] of QUERIES) {
-            console.log(`\n=== ${link(q)}`);
-            for (const [name, ua] of Object.entries(UAS)) {
+          const browser = await chromium.launch();
+          for (const [name, dev] of [["Android (Pixel 7)", devices["Pixel 7"]], ["iPhone 14 UA", devices["iPhone 14"]], ["PC Chrome", devices["Desktop Chrome"]]]) {
+            const { defaultBrowserType, ...opts } = dev;
+            const ctx = await browser.newContext({ ...opts, locale: "ko-KR" });
+            const page = await ctx.newPage();
+            for (const q of QUERIES) {
               try {
-                const r = await fetch(link(q), { headers: { "User-Agent": ua, "Accept-Language": "ko-KR,ko;q=0.9" }, signal: AbortSignal.timeout(15000) });
-                const t = await r.text();
-                const hits = terms.map((w) => `${w}=${(t.match(new RegExp(w, "gi")) || []).length}`).join(" ");
-                const ext = new Set([...t.matchAll(/https?:\/\/(?:www\.)?([a-z0-9.-]+\.[a-z]{2,})\//gi)].map((m) => m[1].toLowerCase()).filter((h) => !/google|gstatic|googleusercontent|youtube|schema\.org|w3\.org/.test(h)));
-                const marks = MARKERS.filter((m) => t.includes(m));
-                console.log(`${name}: HTTP ${r.status} | 최종 ${r.url.slice(0, 60)} | ${t.length} bytes | 검색어 등장 ${hits} | 외부 언론 도메인 ${ext.size}개 ${[...ext].slice(0, 6).join(", ")} | 표시문구 ${JSON.stringify(marks)}`);
+                await page.goto(link(q), { waitUntil: "domcontentloaded", timeout: 25000 });
+                await page.waitForTimeout(3000);
+                const info = await page.evaluate(() => {
+                  const hrefs = [...document.querySelectorAll("a[href]")].map((a) => a.href).filter((h) => /^https?:/.test(h));
+                  const ext = hrefs.filter((h) => !/(^|\.)google\.|gstatic\.|googleusercontent\.|accounts\.google|support\.google|policies\.google/.test(new URL(h).hostname));
+                  const heads = [...document.querySelectorAll('div[role="heading"], h3')].map((e) => e.textContent.trim()).filter((t) => t.length > 15).slice(0, 4);
+                  return { url: location.href, hosts: [...new Set(ext.map((h) => new URL(h).hostname.replace(/^www\./, "")))], heads, text: document.body.innerText.replace(/\s+/g, " ").slice(0, 160) };
+                });
+                console.log(`\n[${name}] ${q}`);
+                console.log(`  주소: ${info.url.slice(0, 90)}`);
+                console.log(`  외부 기사 도메인 ${info.hosts.length}개: ${info.hosts.slice(0, 8).join(", ")}`);
+                for (const h of info.heads) console.log(`  - ${h.slice(0, 90)}`);
+                if (info.hosts.length === 0) console.log(`  본문 앞부분: ${info.text}`);
               } catch (e) {
-                console.log(`${name}: ERR ${e.message}`);
+                console.log(`\n[${name}] ${q}\n  ERR ${e.message.split("\n")[0]}`);
               }
             }
+            await ctx.close();
           }
+          await browser.close();
           EOF
-          node diag.mjs
+          node probe.mjs
