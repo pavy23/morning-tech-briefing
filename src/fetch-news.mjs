@@ -212,8 +212,9 @@ export function cleanKeywords(raw) {
 // (2026-10-05 점검, 최근 10일 대체 링크 9건):
 //  - 모델이 영어 기사를 옮겨 쓴 문장이라 같은 표현의 기사가 없어 9건 중 4건이 결과 0건
 //    (같은 사건을 키워드 "테슬라 옵티머스 기가 텍사스"로 찾으면 44건)
-//  - 안드로이드에서는 Google 뉴스 앱이 news.google.com 링크를 여는 검증된 앱으로 등록돼 있어
-//    (news.google.com/.well-known/assetlinks.json) 검색 링크가 앱으로 열리고 "콘텐츠를 찾을 수 없습니다"가 떴다
+//  - 모바일에서 "콘텐츠를 찾을 수 없습니다"가 떴다는 사용자 보고. 안드로이드에서는 Google 뉴스 앱이
+//    news.google.com 링크를 여는 검증된 앱으로 등록돼 있어(news.google.com/.well-known/assetlinks.json)
+//    검색 링크가 앱으로 열린 것으로 보인다. google.com 검색 링크는 이 등록과 무관하다.
 export function newsSearchLink(headline, keywords) {
   const q = cleanKeywords(keywords) || String(headline ?? "").trim();
   return `https://www.google.com/search?q=${encodeURIComponent(q)}&tbm=nws&hl=ko`;
