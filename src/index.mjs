@@ -7,9 +7,14 @@ import { sendEmail } from "./send-email.mjs";
 import { isJudgeEnabled, runShadowJudgments, formatShadowReport } from "./judge.mjs";
 import { selectItems, formatSelection } from "./select.mjs";
 import { loadHistory, appendHistory, previousHeadlines, todayKst } from "./history.mjs";
+import { isScheduledRun, alreadySent, scheduleDelay } from "./schedule.mjs";
+import {
+  recordUsage, loadLedger, appendLedger, buildRunRecord, costOverview,
+  formatCostLine, formatCostSummary, isOverBudget,
+} from "./cost.mjs";
 import { config } from "./config.mjs";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 
 // 수신 주소는 코드에 두지 않는다 (공개 저장소 대비). Secrets의 TO_EMAIL 필수.
 const TO_EMAIL = process.env.TO_EMAIL;
@@ -20,7 +25,7 @@ const SKIP_EMAIL = process.env.SKIP_EMAIL === "1" || process.env.SKIP_EMAIL === 
 // 판정 리포트 저장 폴더 (Actions 아티팩트로 업로드)
 const OUT_DIR = process.env.OUT_DIR || "out";
 // Jev 선별 모드. 기본 켜짐: 재탕·같은 날 중복을 실제로 빼고 과수집한 후보로 채운다.
-// "0" / "off" / "shadow" 로 두면 판정만 기록하고 메일은 Gemini 결과 그대로 보낸다.
+// "0" / "off" / "shadow" 로 두면 판정만 기록하고 메일은 수집 결과 그대로 보낸다.
 const JEV_SELECT = !/^(0|false|off|shadow)$/i.test((process.env.JEV_SELECT || "1").trim());
 
 // 일시 실패용 재시도 래퍼.
@@ -44,18 +49,72 @@ async function withRetry(fn, label, maxAttempts = 3) {
   throw lastErr;
 }
 
+// Actions 실행 요약 패널에 마크다운을 덧붙인다 (로컬 실행이면 무시)
+async function addJobSummary(markdown) {
+  const file = process.env.GITHUB_STEP_SUMMARY;
+  if (!file) return;
+  try {
+    await appendFile(file, markdown + "\n");
+  } catch (e) {
+    console.error(`[summary] 기록 실패: ${e.message}`);
+  }
+}
+
 async function main() {
   console.log("=== Morning Tech Briefing ===");
   console.log(`수신자: ${TO_EMAIL || "(미설정)"}`);
   console.log(`시각(KST): ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}`);
+
+  // 예약을 하루 여러 번 걸어 두었으므로, 오늘 이미 보냈으면 API를 부르지 않고 끝낸다.
+  // (수동 실행은 테스트·재발송 용도라 그대로 진행)
+  const today = todayKst();
+  const history = await loadHistory();
+  const delay = isScheduledRun() ? scheduleDelay(process.env.SCHEDULE_CRON) : null;
+  if (delay) console.log(`[schedule] ${delay.text}`);
+  if (isScheduledRun() && alreadySent(history, today)) {
+    console.log(`[schedule] ${today} 브리핑은 이미 발송됨 → 이번 예약 실행은 건너뜁니다`);
+    return;
+  }
   console.log("");
 
+  // API를 부르는 동안 쌓인 사용량은 성공·실패와 관계없이 비용 원장에 남긴다
+  const ledger = await loadLedger();
+  const run = { sent: false, model: null };
+  try {
+    await runBriefing({ today, history, ledger, run, delay });
+  } finally {
+    await finalizeCost({ ledger, today, run, delay });
+  }
+}
+
+// 이번 실행 비용을 원장에 쌓고, 로그·실행 요약·경고로 알린다
+async function finalizeCost({ ledger, today, run, delay }) {
+  const record = buildRunRecord({ date: today, trigger: process.env.GITHUB_EVENT_NAME, sent: run.sent, model: run.model });
+  if (record.entries.length === 0) return; // API를 부르기 전에 끝난 실행
+  try {
+    const runs = await appendLedger(ledger, record);
+    const overview = costOverview(runs, today);
+    console.log(`[cost] ${formatCostLine(record, overview)}`);
+    if (isOverBudget(overview)) {
+      console.log(
+        `::warning title=API 비용 경고::월 환산 $${overview.monthlyRunRate.toFixed(2)}가 기준 ` +
+        `$${overview.alertUsd.toFixed(2)}를 넘었습니다. Variables의 MODEL을 claude-haiku-5-5로 바꾸는 것을 검토하세요.`
+      );
+    }
+    await addJobSummary([delay ? `- 예약 실행: ${delay.text}` : "", formatCostSummary(record, overview)].filter(Boolean).join("\n"));
+  } catch (e) {
+    console.error(`[cost] 원장 기록 실패: ${e.message}`);
+  }
+}
+
+async function runBriefing({ today, history, ledger, run }) {
   // 1. 뉴스 수집 (fetchNews 내부에 자체 재시도+폴백이 있어 추가 래핑 불필요)
   //    Jev 선별이 켜져 있으면 목표보다 많이(config.candidates) 받아 재탕·중복을 뺀 자리를 채운다.
   const active = isJudgeEnabled() && JEV_SELECT;
   const want = active ? config.candidates : config.total;
-  console.log(`📡 뉴스 수집 중... (모드: ${active ? "Jev 선별" : isJudgeEnabled() ? "Jev 섀도" : "Gemini 단독"})`);
+  console.log(`📡 뉴스 수집 중... (모드: ${active ? "Jev 선별" : isJudgeEnabled() ? "Jev 섀도" : "수집 결과 그대로"})`);
   const news = await fetchNews({ want });
+  run.model = news.model;
   console.log(
     `✓ ${news.items.length}개 후보 수집 완료 (모델: ${news.model}, ` +
     `실제 기사 링크 ${news.stats.real}/${news.stats.total}, 검색 폴백 ${news.stats.fallback})`
@@ -80,8 +139,6 @@ async function main() {
   console.log("");
 
   // 2. TypeSafe(Jev) 판정 → 선별. 판정 실패 시 기존 방식(앞에서 total건)으로 폴백해 발송은 지킨다.
-  const today = todayKst();
-  const history = await loadHistory();
   let report = null;
   let selection = null;
   if (isJudgeEnabled()) {
@@ -89,6 +146,10 @@ async function main() {
     try {
       report = await runShadowJudgments(news.items, previousHeadlines(history, today));
       console.log(formatShadowReport(report));
+      recordUsage({
+        provider: "typesafe", model: report.model || "jev", stage: "judge",
+        input: report.usage?.input_tokens || 0, output: report.usage?.output_tokens || 0,
+      });
     } catch (e) {
       console.error(`[judge] 판정 실패 (메일 발송에는 영향 없음): ${e.message}`);
     }
@@ -136,7 +197,14 @@ async function main() {
   });
   console.log("");
 
-  // 3. 이메일 구성
+  // 3. 이메일 구성. 푸터에 이번 실행까지의 API 비용(추정)과 월 환산을 싣는다.
+  const preview = buildRunRecord({ date: today, trigger: process.env.GITHUB_EVENT_NAME, sent: !SKIP_EMAIL, model: news.model });
+  const overview = costOverview([...ledger, preview], today);
+  news.costLine = formatCostLine(preview, overview);
+  news.costAlert = isOverBudget(overview)
+    ? `API 비용 월 환산 $${overview.monthlyRunRate.toFixed(2)} — 기준 $${overview.alertUsd.toFixed(2)} 초과. ` +
+      `Haiku 5.5로 바꾸는 것을 검토하세요 (Variables의 MODEL → claude-haiku-5-5).`
+    : null;
   const html = buildEmailHTML(news);
   const text = buildEmailText(news);
   const subject = buildSubject(news);
@@ -164,6 +232,7 @@ async function main() {
     "send-email"
   );
   console.log(`✓ 발송 완료 (id: ${result.id})`);
+  run.sent = true;
 
   // 5. 발송한 헤드라인을 이력에 기록 (다음 날 재탕 판정의 근거)
   try {

@@ -2,14 +2,14 @@
 
 **한국어** · [English](README.md)
 
-매일 **오전 8시(KST)**에 AI · XR · 우주 · 로봇 분야 글로벌 주요 뉴스 10개를 수집해 이메일로 발송합니다. 웹앱과 동일한 카드 디자인의 HTML 메일을 받아볼 수 있습니다.
+매일 **아침(KST, 9시 전)**에 AI · XR · 우주 · 로봇 분야 글로벌 주요 뉴스 10개를 수집해 이메일로 발송합니다. 웹앱과 동일한 카드 디자인의 HTML 메일을 받아볼 수 있습니다.
 
-- ⏰ **GitHub Actions** cron으로 매일 자동 실행 (PC 안 켜져 있어도 작동)
-- 🤖 **Gemini API + Google 검색**으로 당일 뉴스 후보 20개 수집 (무료 등급으로 충분)
-- 🧪 **TypeSafe(Jev) 판정**으로 전날 재탕·같은 날 중복·일반론·주제 이탈을 걸러 10개 선별 (선택, 하루 약 0.003달러)
+- ⏰ **GitHub Actions** cron으로 매일 자동 실행 (PC 안 켜져 있어도 작동). 05:23~08:23 KST에 예약을 네 번 걸어 두고 먼저 시작한 실행만 발송
+- 🤖 **Claude Sonnet 5.5 + 웹 검색**으로 당일 뉴스 후보를 최대 20개 수집하고, 기사 주소는 검색 결과와 대조해 확인 (Claude가 막히면 **Gemini 3.6 Flash**로 자동 전환)
+- 🧪 **TypeSafe(Jev) 판정**으로 전날 재탕·같은 날 중복·일반론·주제 이탈을 걸러 10개 선별 (선택, 하루 약 0.01달러)
 - 📧 **Resend**로 HTML 이메일 발송 (무료 월 3,000통)
 - 🎨 웹 카드 디자인 그대로 재현
-- 💸 **사실상 무료로 운영 가능** (Jev 없이 쓰면 완전 무료)
+- 💸 **API 비용 자동 표시**: 메일 하단과 Actions 실행 요약에 이번 실행·이번 달 누적·월 환산 비용. 월 환산이 기준(기본 $50)을 넘으면 경고 (Sonnet 5.5 기준 월 약 $25~35 예상)
 
 ---
 
@@ -17,14 +17,19 @@
 
 순서대로 따라하면 됩니다. **Claude Code**를 쓰면 3~6단계를 자동으로 처리할 수 있습니다 (맨 아래 참고).
 
-### 1단계 · API 키 2개 발급 (둘 다 무료)
+### 1단계 · API 키 발급
 
-**① Gemini API 키**
+**① Anthropic(Claude) API 키** — 뉴스 수집용 (유료, 크레딧 필요)
+1. https://platform.claude.com 로그인
+2. (권장) **Settings → Workspaces**에서 이 브리핑 전용 워크스페이스를 만들고 **월 지출 한도**를 겁니다. 기본(Default) 워크스페이스에는 한도를 걸 수 없습니다
+3. **Settings → API keys → Create key**에서 그 워크스페이스로 범위를 정한 키를 발급 (`sk-ant-...`). 워크스페이스를 정하지 않은 개인 키는 요청마다 워크스페이스 ID가 필요합니다 (3단계 `ANTHROPIC_WORKSPACE_ID`)
+
+**② Gemini API 키** (선택, 권장) — Claude가 막힐 때 쓰는 백업
 1. https://aistudio.google.com/apikey 접속 (Google 계정으로 로그인)
 2. "Create API Key" 클릭 → 키 복사 (`AIzaSy...`)
-3. **신용카드 불필요, 무료 등급 제공** — 월 5,000회 검색까지 무료 (하루 1회 발송이면 한참 남음)
+3. 백업 모델 `gemini-3.6-flash`는 **유료 등급(결제 등록)**이 필요합니다. 이 저장소에 쓰인 키의 무료 등급은 3.x 모델 할당량이 0이었습니다
 
-**② Resend API 키** (이메일 발송용)
+**③ Resend API 키** (이메일 발송용)
 1. https://resend.com 가입 (GitHub 계정으로 가능)
 2. https://resend.com/api-keys → "Create API Key" → 키 복사 (`re_...`)
 3. **도메인 없이 바로 사용 가능**: 발신 주소 `onboarding@resend.dev` 기본 제공
@@ -50,12 +55,13 @@ git push -u origin main
 
 저장소 페이지에서 **Settings → Secrets and variables → Actions → "New repository secret"**
 
-아래 4개는 필수, 나머지 2개(TypeSafe 관련)는 선택:
+`ANTHROPIC_API_KEY`·`RESEND_API_KEY`·`TO_EMAIL`·`FROM_EMAIL`은 필수, 나머지는 선택:
 
 | Name | Value |
 |------|-------|
-| `GEMINI_API_KEY` | `AIzaSy...` (1단계 ①) |
-| `RESEND_API_KEY` | `re_...` (1단계 ②) |
+| `ANTHROPIC_API_KEY` | `sk-ant-...` (1단계 ①) |
+| `GEMINI_API_KEY` | (선택, 권장) `AIzaSy...` (1단계 ②). 없으면 Claude가 막히는 날 백업 없이 실패 |
+| `RESEND_API_KEY` | `re_...` (1단계 ③) |
 | `TO_EMAIL` | 수신 이메일 (필수 — 코드에 기본값 없음) |
 | `FROM_EMAIL` | `Morning Tech Briefing <onboarding@resend.dev>` |
 | `TYPESAFE_API_KEY` | (선택) `ts_...` — [TypeSafe](https://typesafe.ai) 키. 있으면 Jev 판정·선별이 켜짐 (아래 🧪 절 참고) |
@@ -66,9 +72,13 @@ git push -u origin main
 > **Actions 로그와 아티팩트(판정 리포트)가 누구에게나 보이므로** 뉴스 헤드라인·링크는 공개됩니다.
 > 수신 이메일과 독자 프로필은 코드에 두지 않고 Secrets(`TO_EMAIL`, `READER_PROFILE`)에서만 읽습니다.
 
-> (선택) 모델을 바꾸려면 **Variables** 탭에서 `MODEL` 등록 (예: `gemini-2.5-flash-lite` — 더 빠르고 무료 한도 넉넉)
->
-> (선택) 기본 모델이 일시 오류로 막힐 때 쓰는 백업 모델을 바꾸려면 **Variables** 탭에서 `FALLBACK_MODEL` 등록. 등록하지 않으면 기본값 `gemini-3.5-flash-lite`가 사용되고, `MODEL`과 같은 값으로 두면 폴백이 비활성화됩니다.
+> (선택) **Variables** 탭에서 바꿀 수 있는 값
+> - `MODEL` — 수집 모델. 등록하지 않으면 `claude-sonnet-5-5`. 비용을 줄이려면 `claude-haiku-5-5`, Gemini로 돌아가려면 `gemini-3.6-flash`
+> - `FALLBACK_MODEL` — 기본 모델이 막힐 때 쓰는 백업. 비워 두면 Claude 기본일 때 `gemini-3.6-flash`, Gemini 기본일 때 `gemini-3.5-flash-lite`. `MODEL`과 같게 두면 폴백 비활성
+> - `NEWS_EFFORT`(기본 `medium`), `NEWS_MAX_SEARCHES`(기본 25) — Claude의 생각 깊이와 1회 웹 검색 한도 (검색 1회 $0.01)
+> - `NEWS_TOPUP_SEARCHES`(기본 10) — 분야가 모자랄 때 그 분야만 더 찾는 보충 요청의 검색 한도. 0이면 보충 안 함
+> - `COST_ALERT_USD`(기본 50) — 월 환산 API 비용이 이 금액(USD)을 넘으면 메일 상단과 Actions에 경고
+> - `ANTHROPIC_WORKSPACE_ID` — 워크스페이스를 정하지 않은 개인 키를 쓸 때만 (`wrkspc_...`)
 >
 > ⚠️ `gemini-2.5-flash`와 `gemini-2.5-flash-lite`는 Google 공지 기준 **2026-10-16**에 Gemini API에서 종료될 예정입니다 (2.5 Flash의 후속으로 `gemini-3.6-flash`가 안내됨). 그 전에 `MODEL`을 지원되는 모델로 옮기세요.
 
@@ -79,32 +89,43 @@ git push -u origin main
 3. 우측 **"Run workflow"** 버튼 클릭 → 실행 (`skip_email`을 체크하면 메일 없이 로그만 확인)
 4. 1~2분 후 로그 확인, `TO_EMAIL` 메일함 확인
 
-✅ 메일이 도착하면 완료! 이후 **매일 오전 8시 KST에 자동 발송**됩니다.
+✅ 메일이 도착하면 완료! 이후 **매일 아침 자동 발송**됩니다 (05:23·06:23·07:23·08:23 KST 예약 중 먼저 시작한 실행).
 
 ---
 
 ## ⚙️ 동작 방식
 
 ```
-매일 23:00 UTC (= 익일 08:00 KST)
-        │
+매일 05:23 · 06:23 · 07:23 · 08:23 KST (UTC 20:23~23:23, 정각 지연을 피해 23분)
+        │   먼저 시작한 실행이 보내고, 나머지는 오늘 이력을 보고 API 호출 없이 끝남
         ▼
 GitHub Actions 자동 트리거 (.github/workflows/daily.yml)
         │
         ▼
 src/index.mjs 실행  (주제·카테고리·색상은 briefing.config.json에서 읽음)
         │
-        ├─ fetch-news.mjs   → Gemini API + Google 검색으로 후보 20개 수집
-        │                     + 각 뉴스 링크를 실제 기사 URL로 변환·검증 (환각 배치 가드)
+        ├─ fetch-news.mjs   → Claude Sonnet 5.5 + 웹 검색으로 후보 최대 20개 수집 (claude-news.mjs)
+        │                     + 기사 주소를 검색 결과와 대조·검증 (환각 배치 가드), 실패하면 Gemini 백업
         ├─ judge.mjs        → TypeSafe(Jev)로 재탕·중복·일반론·주제 이탈·관련도·카테고리 판정
         ├─ select.mjs       → 재탕·중복·일반론·주제 이탈 제거 후 카테고리 배분대로 10개 선별
-        ├─ email-template.mjs → 웹 카드 디자인 HTML 생성
-        └─ send-email.mjs   → Resend로 TO_EMAIL 주소에 발송
+        ├─ email-template.mjs → 웹 카드 디자인 HTML 생성 (하단에 수집 모델·API 비용)
+        ├─ send-email.mjs   → Resend로 TO_EMAIL 주소에 발송
+        └─ cost.mjs         → API 사용량으로 비용 추정, .briefing-state/costs.json에 누적
 ```
 
 ### 🔗 뉴스 링크 처리
 
-Gemini가 주는 원문 URL은 Google 그라운딩 리다이렉트(시간이 지나면 만료→404)이거나
+**Claude(기본)** — 웹 검색 결과에 발행처의 실제 기사 주소와 `page_age`(페이지 갱신 시점)가 그대로 옵니다. 모델이 항목마다 쓴 `URL:`을 검색 결과 목록과 대조해서:
+
+1. 검색 결과에 있으면 그대로 사용. 검색 엔진이 방금 가져온 페이지라 접속 확인은 생략합니다 (봇을 막는 언론사가 많아 Actions에서 확인하면 멀쩡한 기사도 403으로 떨어짐)
+2. 없으면 그 항목 요약에 붙은 인용(citation)의 주소로 대체
+3. 둘 다 없으면 지어낸 주소일 수 있어 직접 접속을 확인하고, 실패하면 아래의 검색 대체 링크
+
+2026-10-08 실측(Sonnet 5.5, 3회): 16~18건 모두 검색 결과로 확인된 주소였고, 그중 0~3건은 요약·목록 페이지라 검색 대체 링크가 됐습니다. 프롬프트에서 처음 보도한 언론사·공식 발표를 우선하라고 한 뒤로는 18건 모두 기사 링크였습니다.
+
+**분야 보충** — 한 번에 모이는 건수는 날마다 10~18건으로 들쭉날쭉합니다. 2026-10-08 Actions 검증에서는 12건뿐이었고, 로봇 후보 2건이 모두 재탕으로 빠져 발송 목록에 로봇이 0건이었습니다. 그래서 분야별로 기사 주소가 확인된 항목이 선별에 필요한 수(설정 `count` + 1)보다 적으면, 그 분야만 **짧은 새 요청**으로 더 찾습니다 (검색 최대 `NEWS_TOPUP_SEARCHES`회, 게시 시점 72시간까지, 이미 고른 기사 목록을 주어 중복 제외). 첫 대화를 이어서 보충하면 앞의 검색 결과가 캐시에 다시 쓰여 1회 $1.70이었고, 새 요청으로는 $1.16이었습니다.
+
+**Gemini(백업)** — Gemini가 주는 원문 URL은 Google 그라운딩 리다이렉트(시간이 지나면 만료→404)이거나
 모델이 만든 가짜 주소일 수 있습니다. 그래서 `fetch-news.mjs`는 **수집 시점에**:
 
 1. 잘린 리다이렉트 URL을 `groundingChunks`의 정식 URL과 매칭해 복원
@@ -117,15 +138,15 @@ Gemini가 주는 원문 URL은 Google 그라운딩 리다이렉트(시간이 지
 
 ### 🛡 그라운딩 누락(환각 배치) 가드
 
-Gemini가 503 등으로 재시도된 뒤 성공할 때, 드물게 **Google 검색 없이 모델 기억만으로**
+모델이 503 등으로 재시도된 뒤 성공할 때, 드물게 **웹 검색 없이 모델 기억만으로**
 뉴스를 지어내는 경우가 있습니다 (실제 사례: 2026-09-17, "제미니 울트라 2.0 공개 임박" 등
 존재하지 않는 뉴스 10건이 그대로 발송됨). 이런 배치는 URL도 전부 가짜라서 위 링크 검증에서
 거의 살아남지 못합니다. 그래서 `fetch-news.mjs`는 **시도마다 링크 검증 결과를 집계**해:
 
 - 실제 기사 URL로 확정된 링크가 `MIN_GROUNDED_LINKS`개 미만이면 → 환각 배치로 보고 **재수집**. 기본값은 요청 건수에 비례해 **30%, 최소 3건** (10건 요청 → 3, 후보 20건 → 6). 정상일은 20건 중 12~16건, 환각일은 2~3건이 살아남음
-- 기본 모델이 **그라운딩 chunk를 0개** 돌려주면 Google 검색이 실행되지 않은 것이므로 링크 개수와 무관하게 재수집 (2026-09-25에는 가짜 URL 3개가 우연히 살아 있어 개수 기준만으로는 통과했음)
+- 기본 모델이 **검색 출처를 0개** 돌려주면(Gemini는 그라운딩 chunk, Claude는 검색 결과) 웹 검색이 실행되지 않은 것이므로 링크 개수와 무관하게 재수집 (2026-09-25에는 가짜 URL 3개가 우연히 살아 있어 개수 기준만으로는 통과했음)
 - 최대 6회 시도 중 **실제 링크가 가장 많은 결과**를 채택 (모두 실패해도 발송 누락보다는 낫다고 보고 발송)
-- Actions 로그에 시도별 `항목 수 / 그라운딩 chunk 수 / 실제 기사 링크 수 / 검색 폴백 수`를 남기고,
+- Actions 로그에 시도별 `항목 수 / 검색 출처 수 / 실제 기사 링크 수 / 검색 폴백 수`를 남기고,
   각 뉴스 옆에 `⚠️검색폴백` 표시를 붙여 며칠치 로그로 기준값을 조정할 수 있게 함
 
 기준값은 Variables 탭의 `MIN_GROUNDED_LINKS`에 절대 개수로 지정(0이면 가드 비활성화, 비워 두면 기본값).
@@ -198,7 +219,7 @@ GitHub에 올리기 전 내 PC에서 먼저 확인하려면:
 
 ```bash
 cp .env.example .env
-# .env 파일에 GEMINI_API_KEY, RESEND_API_KEY, TO_EMAIL 입력 (TYPESAFE_API_KEY는 선택)
+# .env 파일에 ANTHROPIC_API_KEY, RESEND_API_KEY, TO_EMAIL 입력 (GEMINI_API_KEY·TYPESAFE_API_KEY는 선택)
 
 npm install
 npm start
@@ -210,10 +231,10 @@ npm start
 
 ## 🔧 커스터마이징
 
-**발송 시각 변경** — `.github/workflows/daily.yml`의 cron 수정
-- 현재: `"0 23 * * *"` (23:00 UTC = 08:00 KST)
-- 예) 오전 7시 KST → `"0 22 * * *"` (22:00 UTC)
-- ⚠️ GitHub Actions cron은 UTC 기준이며, 부하에 따라 몇 분~두 시간 지연될 수 있습니다
+**발송 시각 변경** — `.github/workflows/daily.yml`의 cron 네 줄을 함께 옮깁니다
+- 현재: `23 20`, `23 21`, `23 22`, `23 23` (UTC) = 05:23~08:23 KST. 먼저 시작한 실행만 보내고 나머지는 바로 끝납니다
+- cron은 UTC 기준(KST−9시간)이고, **정각(0분)은 GitHub 부하가 몰려 지연이 큽니다** (이 저장소의 08:00 예약은 2026-09-01~10-08에 1.8~3.9시간 늦은 09:47~11:51에 시작했고, 08-24~26은 실행이 누락됨). 분은 정각을 피하세요
+- 실제 지연은 Actions 로그의 `[schedule] 예정 … → 시작 … (지연 N분)`과 실행 요약에서 확인
 
 **뉴스 주제/카테고리/개수/색상** — 저장소 루트의 `briefing.config.json` 하나만 수정 (아래 절 참고)
 
@@ -224,7 +245,7 @@ npm start
   PC와 일관되게 다크로 보려면 **받는 쪽에서** Gmail 앱 → 설정 → 일반 설정 → 테마 → **어둡게**로
   설정하면 됩니다.
 
-**주말 제외** — `daily.yml`의 cron을 `"0 23 * * 0-4"`로 변경 (일~목 UTC = 월~금 KST)
+**주말 제외** — `daily.yml`의 cron 네 줄 모두 요일 칸을 `0-4`로 변경 (예: `"23 20 * * 0-4"`, 일~목 UTC = 월~금 KST)
 
 ### 🗂 주제 바꾸기 — `briefing.config.json`
 
@@ -297,16 +318,27 @@ Gmail에서 발신자 이름 옆 동그란 로고는 **BIMI** 표준으로 표�
 
 ---
 
-## 💰 비용 — 사실상 무료
+## 💰 비용 — Claude Sonnet 5.5 기준 월 약 $25~35
 
 | 항목 | 비용 |
 |------|------|
-| GitHub Actions | 무료 (Private 월 2,000분 제공, 이 작업은 1회 ~2분) |
+| GitHub Actions | 무료 (공개 저장소 무료, Private 월 2,000분). 발송 실행 1회 2~3분, 이미 보낸 날의 나머지 예약 실행은 수십 초 |
 | Resend | 무료 (월 3,000통, 우리는 월 30통) |
-| Gemini API | `gemini-2.5-flash`는 종료일(2026-10-16)까지 무료. 유료 등급에서 `gemini-3.6-flash`를 쓰면 1회 입력 약 1천·출력 약 1만 토큰(thinking 포함) → **하루 약 $0.04, 월 $1.2**(도입가 기준, 2027년부터 약 $2.4). 검색 그라운딩은 월 5,000회 무료(우리는 30~200회) |
-| TypeSafe(Jev) | 선택. 하루 41요청·입력 약 6.6만 토큰 → **약 $0.003/일, 월 $0.1** (입력 $0.042/M, 출력 무료). 백테스트 1회(87일) 약 $0.3 |
+| Claude API — `claude-sonnet-5-5` (기본) | 2026-10-08 실측 1회 **$0.83~0.89** (보충 없음) = 웹 검색 24~25회 $0.24~0.25 + 토큰 약 $0.6 (캐시 쓰기 19만~21만·캐시 읽기 31만~41만·출력 약 8천), 분야 보충이 붙으면 **$1.16** → **월 약 $25~35** |
+| Claude API — `claude-haiku-5-5` (선택) | 같은 날 같은 조건 1회 $0.29~0.47 → 월 약 $9~14 |
+| Gemini API (백업) | Claude가 막힐 때만 사용. `gemini-3.6-flash` 1회 입력 약 1천·출력 약 1만 토큰(thinking 포함) → 약 $0.04 (도입가, 2027년부터 약 $0.08). 검색 그라운딩은 월 5,000회 무료 |
+| TypeSafe(Jev) | 선택. 하루 41요청·입력 약 22만 토큰 → **약 $0.01/일, 월 $0.3** (입력 $0.042/M, 출력 무료). 백테스트 1회(87일) 약 $0.3 |
 
-> 하루 1회 발송 기준 GitHub·Resend는 무료 한도 안이고 Jev는 월 100원 수준입니다. Gemini는 2.5 계열만 무료인데 Google이 2026-10-16에 종료합니다. 이 저장소에 쓰인 키의 무료 등급은 **3.x 모델 전부 할당량 0(첫 호출부터 429)**이라, 3.x로 가려면 Google AI Studio에서 결제를 켜야 합니다.
+단가 (2026-10-08 [Claude 가격표](https://platform.claude.com/docs/en/about-claude/pricing) 기준, 100만 토큰당): Sonnet 5.5 입력 $2·출력 $10·캐시 읽기 $0.10·캐시 쓰기 $2.50, Haiku 5.5 입력 $0.10·출력 $0.50 (프롬프트 10만 토큰 초과 시 $0.50·$2.50), 웹 검색 1,000회당 $10. 검색 결과는 입력 토큰으로도 과금되며, 한 응답 안에서 검색이 반복될 때마다 누적됩니다. 그래서 요청에 자동 캐싱(`cache_control`)을 켜 두어 반복해서 읽는 앞부분을 캐시 읽기 요율로 냅니다.
+
+### 📈 API 비용 모니터링
+
+- 매 실행마다 API 응답의 사용량(토큰·웹 검색 횟수)에 위 단가를 곱해 비용을 추정하고, `.briefing-state/costs.json`(Actions 캐시)에 쌓습니다
+- **메일 맨 아래**: `API 비용(추정) 이번 실행 $0.84 · 10월 누적 $… · 월 환산 $… (최근 발송 7회 평균 × 30, 경고 기준 $50.00)`
+- **Actions 실행 요약(Summary)**: 단계(수집·판정)별 모델·토큰·검색 횟수·비용 표
+- 월 환산이 `COST_ALERT_USD`(기본 50)를 넘으면 **메일 상단에 노란 경고**와 Actions 경고가 뜹니다 → Variables의 `MODEL`을 `claude-haiku-5-5`로 바꾸거나 `NEWS_MAX_SEARCHES`를 낮추는 것을 검토
+- 이번 달 누적에는 수동 테스트(`skip_email`)도 들어가고, 월 환산은 실제 발송된 실행만으로 계산합니다
+- 추정치입니다. 정확한 청구액은 Claude Console의 Usage·Cost 화면(Gemini는 Google AI Studio)에서 확인하세요. Haiku 5.5는 검색 루프의 반복별 프롬프트 길이가 응답에 나오지 않아, 합산 입력이 10만 토큰을 넘으면 비싼 요율로 잡습니다(상한 추정)
 
 ### Jev 대신 일반 LLM으로도 되나?
 
@@ -333,10 +365,18 @@ Gmail에서 발신자 이름 옆 동그란 로고는 **BIMI** 표준으로 표�
 Gemini 2026년 단가 정리([CloudZero](https://www.cloudzero.com/blog/gemini-pricing/), [Morph](https://www.morphllm.com/gemini-api-pricing)).
 무료 등급 한도는 모델·시기별로 달라 Google AI Studio 요금 페이지에서 확인하세요.
 
-**모델 선택** (모델 세대에 따라 할당량·그라운딩 동작이 다름)
-- `gemini-3.6-flash` (**권장**, 유료 등급) — Google이 2.5 Flash의 후속으로 지정한 모델. 2026-09-25 실측: 1차 시도에 실제 기사 링크 17/20, 20건 모두 출처 매핑. 결제가 필요하며, 이 키의 무료 등급에서는 3.x 모델 전부 429가 났음
-- `gemini-2.5-flash` (코드 기본값, 무료 등급) — 그라운딩은 안정적이나 **2026-10-16 Gemini API에서 종료**
-- `gemini-2.5-flash-lite` — ⚠️ 그라운딩이 약하고 같은 날 종료. **비권장**
+**모델 선택** (`MODEL` 변수) — 2026-10-08 같은 날 같은 프롬프트로 비교한 실측
+
+| 모델 | 후보 수 (AI·XR·우주·로봇) | 기사 주소 확인 | 소요 | 1회 비용 |
+|---|---|---|---|---|
+| `claude-sonnet-5-5` (**기본**) | 16~18 (6·3·3·4~6) | 모두 검색 결과로 확인, 기사 링크 13~18건 | 61~66초 | $0.83~0.89 |
+| `claude-haiku-5-5` | 19 (6·4·4·5) | 19건 모두 검색 결과로 확인 | 142초 | $0.29~0.47 |
+| `gemini-3.6-flash` (백업) | 20 | 실제 기사 링크 19/20 (기사 날짜 정보 없음) | 50초 | 약 $0.05 |
+
+- Claude는 검색 결과의 게시 시점으로 날짜를 확인한 기사만 넣어 20건을 다 채우지 않는 날이 있습니다. Gemini는 날짜 정보가 없어 오래된 기사를 거르는 일을 Jev에 기댑니다 (같은 날 아침 실행에서 20건 중 5건이 재탕으로 빠짐)
+- Claude 웹 검색은 기본 검색(`web_search_20250305`)을 씁니다. 검색 결과를 코드로 거르는 동적 필터링(`web_search_20260209`)은 토큰이 적게 들지만, Sonnet 5.5로 4번 돌려 보니 검색 코드가 오류를 내며 검색 한도만 쓰고 10~12건에 그쳤습니다. `NEWS_SEARCH_TOOL`로 바꿀 수 있습니다
+- `NEWS_EFFORT=high`는 같은 조건에서 비용이 두 배($1.35)였고 후보 수는 늘지 않았습니다
+- `gemini-2.5-flash`·`gemini-2.5-flash-lite`는 **2026-10-16 Gemini API에서 종료**됩니다
 
 > **Gemini 3.x와 JSON.** 3.x 모델은 프롬프트에서 JSON 출력을 요구하면 Google 검색을 조용히 건너뜁니다
 > ([cookbook#1274](https://github.com/google-gemini/cookbook/issues/1274); 이 저장소 실측: 7회 모두
@@ -356,11 +396,25 @@ Gemini 2026년 단가 정리([CloudZero](https://www.cloudzero.com/blog/gemini-p
 - `onboarding@resend.dev` 사용 중이면 수신 주소가 Resend 가입 이메일과 같은지 확인
 - Gmail 스팸함 확인
 
-**Actions가 정시에 안 돌아감**
-- GitHub Actions cron은 트래픽에 따라 지연될 수 있음 (이 저장소에서는 보통 1.5~2시간). 정확한 시각 보장은 안 됨
-- 너무 중요하면 `workflow_dispatch`로 수동 실행 가능
+**메일이 늦게 옴 / Actions가 정시에 안 돌아감**
+- GitHub 예약 실행은 정각에 몰려 늦어집니다 (이 저장소의 08:00 예약은 2026-09-01~10-08에 09:47~11:51에 시작, 08-24~26은 누락). 그래서 05:23~08:23 KST에 네 번 걸어 두고 먼저 시작한 실행이 보냅니다
+- Actions 로그의 `[schedule] 예정 … → 시작 … (지연 N분)`으로 실제 지연을 확인. 첫 예약까지 매일 늦으면 cron을 더 앞당기기
+- 급하면 `workflow_dispatch`로 수동 실행 (수동 실행은 그날 이미 보냈어도 다시 보냄)
 
-**"GEMINI_API_KEY 환경변수가 없습니다"** / **"TO_EMAIL 환경변수가 없습니다"**
+**"Anthropic 인증 정보가 없습니다"** / **Claude 401·403**
+- Secrets의 `ANTHROPIC_API_KEY`가 없거나 틀린 키. 이때 `GEMINI_API_KEY`가 있으면 재시도 없이 바로 Gemini로 넘겨 그날 메일은 나갑니다 (로그 `설정 오류 … 백업 모델 gemini-3.6-flash로 전환`, 메일 하단 `수집 모델: Gemini 3.6 Flash`)
+- `This API key is not scoped to a workspace` → 워크스페이스로 범위를 정한 키를 쓰거나, Variables에 `ANTHROPIC_WORKSPACE_ID`(`wrkspc_...`) 등록
+
+**Claude 529 overloaded / 429**
+- 일시 오류. 20초·40초 기다리며 다시 시도하고, 3회째 막히면 Gemini 백업으로 전환
+
+**메일 상단에 "API 비용 월 환산 … 초과" 경고**
+- 최근 발송 평균 × 30이 `COST_ALERT_USD`(기본 $50)를 넘은 것. Variables의 `MODEL`을 `claude-haiku-5-5`로 바꾸거나 `NEWS_MAX_SEARCHES`를 낮추기. 기준 자체를 바꾸려면 `COST_ALERT_USD`
+
+**Claude 후보가 10여 건뿐이거나 한 분야가 비어 있음**
+- 날짜·주소를 검색으로 확인한 기사만 넣기 때문입니다 (실측 10~18건). 모자란 분야는 보충 요청으로 더 찾고, 로그의 `보충: … 요청 → N건 추가`로 확인할 수 있습니다. 그래도 자주 비면 `NEWS_TOPUP_SEARCHES`(기본 10)나 `NEWS_MAX_SEARCHES`(기본 25)를 올리기 (검색 1회 $0.01)
+
+**"GEMINI_API_KEY 환경변수가 없습니다"** (Gemini가 기본 모델일 때) / **"TO_EMAIL 환경변수가 없습니다"**
 - 3단계 Secrets 등록을 빠뜨렸거나 이름 오타. 대소문자 정확히 일치해야 함
 
 **"Gemini API 429" (quota/rate limit)**
@@ -389,7 +443,7 @@ Gemini 2026년 단가 정리([CloudZero](https://www.cloudzero.com/blog/gemini-p
 - 재탕·일반론 제거 후 후보가 모자란 것. `briefing.config.json`의 `candidates`를 25~30으로 올리기
 
 **`[judge] 판정 실패`가 보임**
-- TypeSafe 장애나 키 문제. 그날은 자동으로 Gemini 결과 앞 10건을 보냈으므로 메일은 정상. 반복되면 키 확인
+- TypeSafe 장애나 키 문제. 그날은 자동으로 수집 결과 앞 10건을 보냈으므로 메일은 정상. 반복되면 키 확인
 
 **JSON 파싱 오류**
 - 코드에 잘린 JSON 복구 로직이 있어 대부분 자동 처리됨. 계속 실패하면 `maxOutputTokens`를 더 올리거나 모델 변경
@@ -400,7 +454,7 @@ Gemini 2026년 단가 정리([CloudZero](https://www.cloudzero.com/blog/gemini-p
 
 이 폴더에서 Claude Code를 실행한 뒤 이렇게 요청하세요:
 
-> "이 프로젝트를 GitHub의 새 private 저장소에 올리고, gh CLI로 Secrets 4개(GEMINI_API_KEY, RESEND_API_KEY, TO_EMAIL, FROM_EMAIL)를 등록한 다음, workflow를 한 번 수동 실행해서 테스트해줘."
+> "이 프로젝트를 GitHub의 새 private 저장소에 올리고, gh CLI로 Secrets(ANTHROPIC_API_KEY, GEMINI_API_KEY, RESEND_API_KEY, TO_EMAIL, FROM_EMAIL)를 등록한 다음, workflow를 한 번 수동 실행해서 테스트해줘."
 
 Claude Code가 `git`, `gh secret set`, `gh workflow run` 명령을 순서대로 실행해 2~4단계를 한 번에 처리합니다. (API 키 값은 Claude Code 실행 시 직접 입력)
 
@@ -411,13 +465,16 @@ Claude Code가 `git`, `gh secret set`, `gh workflow run` 명령을 순서대로 
 ```
 morning-tech-briefing/
 ├── .github/workflows/
-│   ├── daily.yml                 # 매일 8시 KST cron, 이력 캐시, 판정 리포트 아티팩트
+│   ├── daily.yml                 # 매일 아침 cron 4회(먼저 시작한 실행만 발송), 이력·비용 캐시, 판정 리포트 아티팩트
 │   └── backtest.yml              # 과거 90일치로 Jev 판정 일괄 검증 (수동 실행)
 ├── briefing.config.json          # 주제·카테고리·개수·색상 정의 (주제 바꾸려면 여기)
 ├── src/
 │   ├── index.mjs                 # 메인 엔트리: 수집 → 판정 → 선별 → 발송 → 이력 기록
 │   ├── config.mjs                # briefing.config.json 로더·검증
-│   ├── fetch-news.mjs            # Gemini API 뉴스 수집 + 링크 검증 + 환각 배치 가드
+│   ├── fetch-news.mjs            # 뉴스 수집(모델별 분기·재시도·백업 전환) + 링크 검증 + 환각 배치 가드
+│   ├── claude-news.mjs           # Claude + 웹 검색 수집, 기사 주소를 검색 결과와 대조
+│   ├── cost.mjs                  # API 비용 추정·원장(.briefing-state/costs.json)·월 환산
+│   ├── schedule.mjs              # 예약 실행 중복 발송 방지·지연 계산
 │   ├── judge.mjs                 # TypeSafe(Jev) 판정 (재탕·중복·일반론·주제 이탈·관련도·카테고리)
 │   ├── select.mjs                # 판정 결과로 제거·배분·선별
 │   ├── history.mjs               # 발송 헤드라인 이력 (.briefing-state/, 캐시로 유지)
