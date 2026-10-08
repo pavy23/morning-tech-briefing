@@ -2,14 +2,14 @@
 
 **English** · [한국어](README.ko.md)
 
-Every morning at **08:00 KST** this project collects the day's top global news in AI · XR · space · robotics and emails ten of them as an HTML briefing with a card layout.
+Every morning **before 09:00 KST** this project collects the day's top global news in AI · XR · space · robotics and emails ten of them as an HTML briefing with a card layout.
 
-- ⏰ Runs on a **GitHub Actions** cron, so your machine can stay off
-- 🤖 **Gemini API + Google Search grounding** collects 20 candidate stories (the free tier is enough)
-- 🧪 **TypeSafe (Jev) judgments** drop repeats from earlier days, same-day duplicates, generic commentary and off-topic items, then keep 10 (optional, about $0.003 a day)
+- ⏰ Runs on a **GitHub Actions** cron, so your machine can stay off. Four schedules between 05:23 and 08:23 KST; the first run to start sends and the rest exit
+- 🤖 **Claude Sonnet 5.5 with web search** collects up to 20 candidate stories, and each article address is checked against the search results (falls back to **Gemini 3.6 Flash** automatically when Claude fails)
+- 🧪 **TypeSafe (Jev) judgments** drop repeats from earlier days, same-day duplicates, generic commentary and off-topic items, then keep 10 (optional, about $0.01 a day)
 - 📧 **Resend** delivers the HTML email (free tier: 3,000 a month)
 - 🎨 The same card design as the web app
-- 💸 **Effectively free** to run (entirely free without Jev)
+- 💸 **API cost shown automatically**: the email footer and the Actions run summary show this run, month to date and a monthly run rate, with a warning above a threshold (default $50). Expect about $25–27 a month with Sonnet 5.5
 
 The prompts and the email copy are in Korean. See [Changing the topics](#-changing-the-topics--briefingconfigjson) for how to adapt them.
 
@@ -19,14 +19,19 @@ The prompts and the email copy are in Korean. See [Changing the topics](#-changi
 
 Follow the steps in order. With **Claude Code** you can automate steps 3 to 6 (see the end of this document).
 
-### Step 1 · Get two API keys (both free)
+### Step 1 · Get the API keys
 
-**① Gemini API key**
+**① Anthropic (Claude) API key** — news collection (paid, needs credits)
+1. Sign in at https://platform.claude.com
+2. (recommended) Under **Settings → Workspaces**, create a workspace for this briefing and set a **monthly spend limit**. The Default workspace cannot have limits
+3. Under **Settings → API keys → Create key**, create a key scoped to that workspace (`sk-ant-...`). A personal key that is not scoped to a workspace needs a workspace ID on every request (`ANTHROPIC_WORKSPACE_ID` in step 3)
+
+**② Gemini API key** (optional, recommended) — backup when Claude fails
 1. Open https://aistudio.google.com/apikey and sign in with a Google account
 2. Click "Create API Key" and copy it (`AIzaSy...`)
-3. **No credit card needed.** The free tier includes 5,000 grounded searches a month; one send a day uses about 30
+3. The backup model `gemini-3.6-flash` needs the **paid tier** (billing enabled). The free tier of the key used here had zero quota for every 3.x model
 
-**② Resend API key** (email delivery)
+**③ Resend API key** (email delivery)
 1. Sign up at https://resend.com (GitHub login works)
 2. https://resend.com/api-keys → "Create API Key" → copy it (`re_...`)
 3. **Works without a domain**: the sender address `onboarding@resend.dev` is provided
@@ -52,12 +57,13 @@ git push -u origin main
 
 In the repository: **Settings → Secrets and variables → Actions → "New repository secret"**
 
-The first four are required; the last two (TypeSafe) are optional:
+`ANTHROPIC_API_KEY`, `RESEND_API_KEY`, `TO_EMAIL` and `FROM_EMAIL` are required; the rest are optional:
 
 | Name | Value |
 |------|-------|
-| `GEMINI_API_KEY` | `AIzaSy...` (step 1 ①) |
-| `RESEND_API_KEY` | `re_...` (step 1 ②) |
+| `ANTHROPIC_API_KEY` | `sk-ant-...` (step 1 ①) |
+| `GEMINI_API_KEY` | (optional, recommended) `AIzaSy...` (step 1 ②). Without it, a day when Claude fails has no backup |
+| `RESEND_API_KEY` | `re_...` (step 1 ③) |
 | `TO_EMAIL` | Recipient address (required; the code has no default) |
 | `FROM_EMAIL` | `Morning Tech Briefing <onboarding@resend.dev>` |
 | `TYPESAFE_API_KEY` | (optional) `ts_...` from [TypeSafe](https://typesafe.ai). Enables the Jev judgments and selection (see 🧪 below) |
@@ -69,9 +75,12 @@ The first four are required; the last two (TypeSafe) are optional:
 > The recipient address and the reader profile are never in the code; they are read only from Secrets
 > (`TO_EMAIL`, `READER_PROFILE`).
 
-> (optional) To change the model, add `MODEL` under the **Variables** tab (for example `gemini-2.5-flash-lite`, faster with a larger free quota)
->
-> (optional) To change the backup model used when the primary one keeps failing with transient errors, add `FALLBACK_MODEL` under **Variables**. The default is `gemini-3.5-flash-lite`; setting it equal to `MODEL` disables the fallback.
+> (optional) Values you can set under the **Variables** tab
+> - `MODEL` — collection model. Defaults to `claude-sonnet-5-5`. Use `claude-haiku-5-5` to cut cost, or `gemini-3.6-flash` to go back to Gemini
+> - `FALLBACK_MODEL` — backup when the primary model fails. Empty means `gemini-3.6-flash` for a Claude primary and `gemini-3.5-flash-lite` for a Gemini primary; setting it equal to `MODEL` disables the fallback
+> - `NEWS_EFFORT` (default `medium`), `NEWS_MAX_SEARCHES` (default 25) — Claude's effort level and its web-search cap per run (each search costs $0.01)
+> - `COST_ALERT_USD` (default 50) — warn in the email and in Actions when the monthly run rate exceeds this many USD
+> - `ANTHROPIC_WORKSPACE_ID` — only for a personal key that is not scoped to a workspace (`wrkspc_...`)
 >
 > ⚠️ `gemini-2.5-flash` and `gemini-2.5-flash-lite` are scheduled to shut down on the Gemini API on **2026-10-16** (per Google's deprecation notices; Google names `gemini-3.6-flash` as the replacement for 2.5 Flash). Move `MODEL` to a supported model before then.
 
@@ -82,32 +91,41 @@ The first four are required; the last two (TypeSafe) are optional:
 3. Click **"Run workflow"** on the right (check `skip_email` to see the logs without sending)
 4. After a minute or two, check the log and the `TO_EMAIL` inbox
 
-✅ Once the email arrives you are done. It will now be **sent automatically every day at 08:00 KST**.
+✅ Once the email arrives you are done. It will now be **sent automatically every morning** (by the first of the 05:23, 06:23, 07:23 and 08:23 KST schedules to start).
 
 ---
 
 ## ⚙️ How it works
 
 ```
-Every day at 23:00 UTC (= 08:00 KST next day)
-        │
+Every day at 05:23 · 06:23 · 07:23 · 08:23 KST (20:23–23:23 UTC, off the hour to avoid scheduling delays)
+        │   the first run to start sends; later runs see today's history and exit without API calls
         ▼
 GitHub Actions trigger (.github/workflows/daily.yml)
         │
         ▼
 src/index.mjs  (topics, categories and colors come from briefing.config.json)
         │
-        ├─ fetch-news.mjs   → Gemini API + Google Search collects 20 candidates
-        │                     + resolves each link to the real article URL (hallucinated-batch guard)
+        ├─ fetch-news.mjs   → Claude Sonnet 5.5 + web search collects up to 20 candidates (claude-news.mjs)
+        │                     + checks each article address against the search results (hallucinated-batch guard), Gemini as backup
         ├─ judge.mjs        → TypeSafe (Jev) judges repeats, duplicates, generic, off-topic, relevance, category
         ├─ select.mjs       → removes repeats/duplicates/generic/off-topic and fills the category quotas (10)
-        ├─ email-template.mjs → renders the card-style HTML
-        └─ send-email.mjs   → sends through Resend to TO_EMAIL
+        ├─ email-template.mjs → renders the card-style HTML (collection model and API cost in the footer)
+        ├─ send-email.mjs   → sends through Resend to TO_EMAIL
+        └─ cost.mjs         → estimates API cost from usage and appends it to .briefing-state/costs.json
 ```
 
 ### 🔗 Link handling
 
-The URLs Gemini returns are either Google grounding redirects (which expire and 404 later) or addresses the
+**Claude (default)** — web search results carry the publisher's real article address and a `page_age` (when the page was last updated). The `URL:` line the model writes for each item is matched against the search results:
+
+1. If it is in the results it is used as is. The search engine just fetched that page, so the reachability check is skipped (many news sites block bots, and checking from Actions would drop healthy articles with a 403)
+2. Otherwise the address of a citation attached to that item's summary is used
+3. If neither exists the address may be made up, so it is fetched directly, and a failure falls back to the search link below
+
+Measured on 2026-10-08 (Sonnet 5.5, three runs): all 16–18 items had an address confirmed by the search results, and 0–3 of them were digest or listing pages that became search links. After the prompt began asking for the original publisher or the official announcement, all 18 were article links.
+
+**Gemini (backup)** — The URLs Gemini returns are either Google grounding redirects (which expire and 404 later) or addresses the
 model made up. So `fetch-news.mjs` does the following **at collection time**:
 
 1. Restores truncated redirect URLs by matching them against the canonical `groundingChunks` URLs
@@ -120,15 +138,15 @@ Every search link is logged in a `[link]` block with the reason (no source attac
 
 ### 🛡 Hallucinated-batch guard
 
-When Gemini succeeds on a retry after a 503, it occasionally answers **from memory without Google Search** and
+When a model succeeds on a retry after a 503, it occasionally answers **from memory without web search** and
 invents the news (observed on 2026-09-17: ten non-existent stories such as "Gemini Ultra 2.0 launch imminent"
 went out as a normal email). Every URL in such a batch is fabricated, so almost none survive link resolution.
 `fetch-news.mjs` therefore **tallies link resolution on every attempt**:
 
 - If fewer than `MIN_GROUNDED_LINKS` links resolve to real articles, the attempt is treated as hallucinated and **collection is retried**. The default scales with the number of stories requested: **30%, at least 3** (10 requested → 3, 20 candidates → 6). On healthy days 12–16 of 20 survive; on hallucinated days 2–3 do
-- If the primary model returns **zero grounding chunks**, Google Search did not run, and the attempt is retried regardless of the link count (on 2026-09-25 three fabricated URLs happened to be live and slipped past the count alone)
+- If the primary model returns **zero search sources** (grounding chunks for Gemini, search results for Claude), web search did not run, and the attempt is retried regardless of the link count (on 2026-09-25 three fabricated URLs happened to be live and slipped past the count alone)
 - Across up to 6 attempts the result with the **most real links** wins (if all fail, it still sends, on the grounds that a weak briefing beats a missing one)
-- Each attempt logs `items / grounding chunks / real links / search fallbacks`, and each item is tagged `⚠️검색폴백` when it fell back, so the threshold can be tuned from a few days of logs
+- Each attempt logs `items / search sources / real links / search fallbacks`, and each item is tagged `⚠️검색폴백` when it fell back, so the threshold can be tuned from a few days of logs
 
 Tune it with the `MIN_GROUNDED_LINKS` repository variable as an absolute count (0 disables the guard; an empty
 value means "use the default"). Check how many links normally survive and set the threshold below half of that.
@@ -200,7 +218,7 @@ To check on your machine before pushing:
 
 ```bash
 cp .env.example .env
-# fill in GEMINI_API_KEY, RESEND_API_KEY, TO_EMAIL (TYPESAFE_API_KEY is optional)
+# fill in ANTHROPIC_API_KEY, RESEND_API_KEY, TO_EMAIL (GEMINI_API_KEY and TYPESAFE_API_KEY are optional)
 
 npm install
 npm start
@@ -212,10 +230,10 @@ The console prints the candidates, judgments and sent list, and the email goes o
 
 ## 🔧 Customizing
 
-**Send time** — edit the cron in `.github/workflows/daily.yml`
-- Current: `"0 23 * * *"` (23:00 UTC = 08:00 KST)
-- Example: 07:00 KST → `"0 22 * * *"` (22:00 UTC)
-- ⚠️ GitHub Actions cron is in UTC and can lag from a few minutes to two hours under load
+**Send time** — move the four cron lines in `.github/workflows/daily.yml` together
+- Current: `23 20`, `23 21`, `23 22`, `23 23` (UTC) = 05:23–08:23 KST. The first run to start sends; the rest exit
+- Cron is in UTC (KST − 9 hours), and **on-the-hour schedules lag the most** because GitHub's load peaks there (this repository's 08:00 schedule started 1.8–3.9 hours late, at 09:47–11:51, from 2026-09-01 to 10-08, and the runs for 08-24 to 08-26 never came). Keep the minute off the hour
+- Check the actual lag in the Actions log (`[schedule] 예정 … → 시작 … (지연 N분)`, planned → started, delay) and in the run summary
 
 **Topics, categories, counts, colors** — edit only `briefing.config.json` in the repository root (see below)
 
@@ -225,7 +243,7 @@ The console prints the candidates, judgments and sent list, and the email goes o
 - ⚠️ **The Gmail mobile app** follows the device/app theme regardless of the email's code (it cannot be forced).
   For a consistent dark look, set Gmail app → Settings → General settings → Theme → **Dark** on the receiving side.
 
-**Skip weekends** — change the cron in `daily.yml` to `"0 23 * * 0-4"` (Sun–Thu UTC = Mon–Fri KST)
+**Skip weekends** — set the weekday field of all four cron lines in `daily.yml` to `0-4` (for example `"23 20 * * 0-4"`; Sun–Thu UTC = Mon–Fri KST)
 
 ### 🗂 Changing the topics — `briefing.config.json`
 
@@ -298,16 +316,27 @@ the avatar empty is recommended (it has no effect on functionality).
 
 ---
 
-## 💰 Cost — effectively free
+## 💰 Cost — about $25–27 a month with Claude Sonnet 5.5
 
 | Item | Cost |
 |------|------|
-| GitHub Actions | Free (2,000 minutes a month for private repos; a run takes about 2 minutes) |
+| GitHub Actions | Free (free for public repos; 2,000 minutes a month for private ones). A sending run takes 2–3 minutes; the remaining schedules on a day already sent exit in seconds |
 | Resend | Free (3,000 a month; this uses 30) |
-| Gemini API | Free on `gemini-2.5-flash` until its shutdown (2026-10-16). On the paid tier with `gemini-3.6-flash`: about 1k input + 10k output tokens a run (thinking included) → **about $0.04 a day, $1.2 a month** at the introductory price, about $2.4 from 2027. Grounded searches stay free (5,000 a month; this uses 30–200) |
-| TypeSafe (Jev) | Optional. 41 requests and about 66k input tokens a day → **about $0.003 a day, $0.1 a month** (input $0.042/M, output free). One 87-day backtest is about $0.3 |
+| Claude API — `claude-sonnet-5-5` (default) | Measured 2026-10-08: **$0.83–0.89 a run** = 24–25 web searches ($0.24–0.25) + about $0.6 of tokens (190k–210k cache writes, 300k–410k cache reads, about 8k output) → **about $25–27 a month** |
+| Claude API — `claude-haiku-5-5` (optional) | Same day, same settings: $0.29–0.47 a run → about $9–14 a month |
+| Gemini API (backup) | Used only when Claude fails. `gemini-3.6-flash`: about 1k input + 10k output tokens a run (thinking included) → about $0.04 (introductory price; about $0.08 from 2027). Grounded searches are free up to 5,000 a month |
+| TypeSafe (Jev) | Optional. 41 requests and about 220k input tokens a day → **about $0.01 a day, $0.3 a month** (input $0.042/M, output free). One 87-day backtest is about $0.3 |
 
-> At one send a day GitHub and Resend stay within their free tiers and Jev costs about ten cents a month. Gemini is free only on the 2.5 models, which Google retires on 2026-10-16; the free tier of the API key used here had **zero quota for every 3.x model** (429 on the first call), so the 3.x path needs billing enabled in Google AI Studio.
+Prices per million tokens as of 2026-10-08 ([Claude pricing](https://platform.claude.com/docs/en/about-claude/pricing)): Sonnet 5.5 input $2, output $10, cache read $0.10, cache write $2.50; Haiku 5.5 input $0.10, output $0.50 ($0.50 and $2.50 for prompts over 100k tokens); web search $10 per 1,000 searches. Search results are also billed as input tokens, and they accumulate as the search loop repeats within one response, so requests enable automatic caching (`cache_control`) to pay the cache-read rate on the part that is re-read.
+
+### 📈 API cost monitoring
+
+- Every run multiplies the usage in the API responses (tokens, web searches) by the prices above and appends the estimate to `.briefing-state/costs.json` (kept in the Actions cache)
+- **Email footer**: `API 비용(추정) 이번 실행 $0.84 · 10월 누적 $… · 월 환산 $… (최근 발송 7회 평균 × 30, 경고 기준 $50.00)` — estimated API cost: this run, month to date, monthly run rate (average of the last 7 sends × 30), alert threshold
+- **Actions run summary**: a table per stage (collection, judgment) with model, tokens, searches and cost
+- When the run rate exceeds `COST_ALERT_USD` (default 50), the email shows **a yellow warning at the top** and Actions shows a warning → consider setting `MODEL` to `claude-haiku-5-5` or lowering `NEWS_MAX_SEARCHES`
+- Month to date includes manual test runs (`skip_email`); the run rate uses only runs that sent an email
+- These are estimates. The exact bill is in the Claude Console Usage and Cost pages (Google AI Studio for Gemini). For Haiku 5.5 the per-iteration prompt size of the search loop is not reported, so a combined input over 100k tokens is priced at the higher rate (an upper bound)
 
 ### Could a general LLM do this instead of Jev?
 
@@ -334,10 +363,18 @@ Price sources: TypeSafe pricing summary ([Developers Digest](https://www.develop
 Gemini 2026 pricing summaries ([CloudZero](https://www.cloudzero.com/blog/gemini-pricing/), [Morph](https://www.morphllm.com/gemini-api-pricing)).
 Free-tier limits vary by model and date; check the Google AI Studio pricing page.
 
-**Model choice** (quota and grounding behaviour differ by model generation)
-- `gemini-3.6-flash` (**recommended**, paid tier): Google's named replacement for 2.5 Flash. Measured 2026-09-25: 17/20 real article links on the first attempt, 20/20 items with a grounding source. Needs billing; the free tier returned 429 for every 3.x model on this key
-- `gemini-2.5-flash` (code default, free tier): stable grounding, but **shut down on the Gemini API on 2026-10-16**
-- `gemini-2.5-flash-lite`: ⚠️ weak grounding, and shut down on the same date. **Not recommended**
+**Model choice** (`MODEL` variable) — measured on 2026-10-08, same day, same prompt
+
+| Model | Candidates (AI·XR·space·robotics) | Article addresses | Time | Cost per run |
+|---|---|---|---|---|
+| `claude-sonnet-5-5` (**default**) | 16–18 (6·3·3·4–6) | all confirmed by search results, 13–18 article links | 61–66 s | $0.83–0.89 |
+| `claude-haiku-5-5` | 19 (6·4·4·5) | all 19 confirmed by search results | 142 s | $0.29–0.47 |
+| `gemini-3.6-flash` (backup) | 20 | 19/20 real article links (no publication dates) | 50 s | about $0.05 |
+
+- Claude includes only stories whose publication time it confirmed in the search results, so some days it returns fewer than 20. Gemini gives no dates, so filtering old stories falls to Jev (the same morning's run lost 5 of 20 as repeats)
+- Claude uses the basic web search tool (`web_search_20250305`). Dynamic filtering (`web_search_20260209`), which filters results with code, uses fewer tokens, but in four Sonnet 5.5 runs the search code kept failing, spent the search cap and returned only 10–12 stories. `NEWS_SEARCH_TOOL` switches it
+- `NEWS_EFFORT=high` doubled the cost ($1.35) under the same settings without more candidates
+- `gemini-2.5-flash` and `gemini-2.5-flash-lite` **shut down on the Gemini API on 2026-10-16**
 
 > **Gemini 3.x and JSON.** 3.x models silently skip Google Search when the prompt asks for JSON output
 > ([cookbook#1274](https://github.com/google-gemini/cookbook/issues/1274); measured here: seven attempts, no
@@ -359,11 +396,25 @@ Free-tier limits vary by model and date; check the Google AI Studio pricing page
 - With `onboarding@resend.dev`, confirm the recipient is the email you signed up to Resend with
 - Check the Gmail spam folder
 
-**The workflow does not run on time**
-- GitHub Actions cron lags under load (in this repository usually 1.5–2 hours). Exact timing is not guaranteed
-- If it matters, run it manually with `workflow_dispatch`
+**The email arrives late / the workflow does not run on time**
+- GitHub's scheduled runs lag on the hour (this repository's 08:00 schedule started at 09:47–11:51 from 2026-09-01 to 10-08, and 08-24 to 08-26 never ran). That is why there are four schedules between 05:23 and 08:23 KST and the first to start sends
+- Check the lag in the log line `[schedule] 예정 … → 시작 … (지연 N분)`. If even the first schedule is late every day, move the cron lines earlier
+- If it matters, run it manually with `workflow_dispatch` (a manual run sends even if today's email already went out)
 
-**"GEMINI_API_KEY 환경변수가 없습니다" / "TO_EMAIL 환경변수가 없습니다"** (environment variable missing)
+**"Anthropic 인증 정보가 없습니다" (no Anthropic credentials) / Claude 401 or 403**
+- `ANTHROPIC_API_KEY` is missing or wrong. With `GEMINI_API_KEY` present, the run switches to Gemini immediately without retrying and the email still goes out (log: `설정 오류 … 백업 모델 gemini-3.6-flash로 전환`; email footer: `수집 모델: Gemini 3.6 Flash`)
+- `This API key is not scoped to a workspace` → use a key scoped to a workspace, or add `ANTHROPIC_WORKSPACE_ID` (`wrkspc_...`) under Variables
+
+**Claude 529 overloaded / 429**
+- Transient. The run retries after 20 s and 40 s and switches to the Gemini backup after the third failure
+
+**A cost warning at the top of the email ("API 비용 월 환산 … 초과")**
+- The average of recent sends × 30 exceeded `COST_ALERT_USD` (default $50). Set `MODEL` to `claude-haiku-5-5` or lower `NEWS_MAX_SEARCHES`; change the threshold itself with `COST_ALERT_USD`
+
+**Claude returns only a dozen or so candidates, or a category is empty**
+- It includes only stories whose date and address it confirmed by search (16–18 when measured). If a category is often empty, raise `NEWS_MAX_SEARCHES` to 30 (each search costs $0.01)
+
+**"GEMINI_API_KEY 환경변수가 없습니다" (with a Gemini primary model) / "TO_EMAIL 환경변수가 없습니다"** (environment variable missing)
 - A Secret from step 3 is missing or misspelled. Names are case-sensitive
 
 **"Gemini API 429" (quota / rate limit)**
@@ -392,7 +443,7 @@ Free-tier limits vary by model and date; check the Google AI Studio pricing page
 - Not enough candidates survive after removing repeats and generic items. Raise `candidates` in `briefing.config.json` to 25–30
 
 **`[judge] 판정 실패` (judgment failed) appears**
-- A TypeSafe outage or key problem. That day the first 10 Gemini items were sent automatically, so the email is fine. If it recurs, check the key
+- A TypeSafe outage or key problem. That day the first 10 collected items were sent automatically, so the email is fine. If it recurs, check the key
 
 **JSON parse errors**
 - The code recovers truncated JSON in most cases. If it keeps failing, raise `maxOutputTokens` or change the model
@@ -403,7 +454,7 @@ Free-tier limits vary by model and date; check the Google AI Studio pricing page
 
 Run Claude Code in this folder and ask:
 
-> "Push this project to a new private GitHub repository, register the four Secrets (GEMINI_API_KEY, RESEND_API_KEY, TO_EMAIL, FROM_EMAIL) with the gh CLI, then run the workflow once manually to test it."
+> "Push this project to a new private GitHub repository, register the Secrets (ANTHROPIC_API_KEY, GEMINI_API_KEY, RESEND_API_KEY, TO_EMAIL, FROM_EMAIL) with the gh CLI, then run the workflow once manually to test it."
 
 Claude Code runs `git`, `gh secret set` and `gh workflow run` in order and completes steps 2 to 4 in one go. (You type the key values yourself.)
 
@@ -414,13 +465,16 @@ Claude Code runs `git`, `gh secret set` and `gh workflow run` in order and compl
 ```
 morning-tech-briefing/
 ├── .github/workflows/
-│   ├── daily.yml                 # 08:00 KST cron, history cache, judgment report artifact
+│   ├── daily.yml                 # four morning crons (the first to start sends), history and cost cache, judgment report artifact
 │   └── backtest.yml              # replays the last 90 days through the Jev judgments (manual)
 ├── briefing.config.json          # topics, categories, counts, colors (edit this to change topics)
 ├── src/
 │   ├── index.mjs                 # entry point: collect → judge → select → send → record history
 │   ├── config.mjs                # loads and validates briefing.config.json
-│   ├── fetch-news.mjs            # Gemini collection + link resolution + hallucinated-batch guard
+│   ├── fetch-news.mjs            # collection (per-model routing, retries, backup switch) + link resolution + hallucinated-batch guard
+│   ├── claude-news.mjs           # Claude + web search collection, checks article addresses against the results
+│   ├── cost.mjs                  # API cost estimate, ledger (.briefing-state/costs.json), monthly run rate
+│   ├── schedule.mjs              # skips duplicate scheduled sends, computes the schedule lag
 │   ├── judge.mjs                 # TypeSafe (Jev) judgments (repeat, duplicate, generic, off-topic, relevance, category)
 │   ├── select.mjs                # removal, quotas and final selection from the judgments
 │   ├── history.mjs               # sent-headline history (.briefing-state/, kept in the Actions cache)

@@ -2,8 +2,13 @@ name: Daily Morning Tech Briefing
 
 on:
   schedule:
-    # 매일 23:00 UTC = 다음날 08:00 KST (KST = UTC+9)
-    - cron: "0 23 * * *"
+    # GitHub 예약 실행은 정각에 몰려 늦어진다(2026-09-01~10-08: 08:00 예약이 1.8~3.9시간 늦은 09:47~11:51에 시작, 08-24~26은 누락).
+    # 정각을 피한 23분에 네 번 걸어 두고, 먼저 시작한 실행이 보내면 나머지는 API 호출 없이 바로 끝난다.
+    # 앞의 예약이 3시간 넘게 밀려도 09:00 전에 도착하도록 05:23 KST부터 시작한다. (KST = UTC+9)
+    - cron: "23 20 * * *" # 05:23 KST
+    - cron: "23 21 * * *" # 06:23 KST
+    - cron: "23 22 * * *" # 07:23 KST
+    - cron: "23 23 * * *" # 08:23 KST
   # 수동 실행 버튼 (테스트용)
   workflow_dispatch:
     inputs:
@@ -12,19 +17,25 @@ on:
         type: boolean
         default: false
       model:
-        description: "이번 실행에서만 쓸 Gemini 모델 (비우면 Variables의 MODEL). 모델 교체 전 테스트용"
+        description: "이번 실행에서만 쓸 모델 (claude-sonnet-5-5, claude-haiku-5-5, gemini-3.6-flash 등. 비우면 Variables의 MODEL)"
         type: string
         default: ""
       debug:
-        description: "Gemini 응답 구조를 로그에 남기고 가드를 끈 채 1회만 수집 (진단용)"
+        description: "가드를 끈 채 1회만 수집하고 Gemini 응답 구조를 로그에 남김 (진단용)"
         type: boolean
         default: false
+
+# 예약 실행과 수동 실행이 겹치면 차례로 돈다. 뒤에 도는 실행은 앞 실행이 저장한 이력을 보고
+# 오늘 이미 보냈는지 판단하므로 동시에 돌면 안 된다.
+concurrency:
+  group: morning-briefing
+  cancel-in-progress: false
 
 jobs:
   send-briefing:
     runs-on: ubuntu-latest
-    # 시도마다 링크 검증(최대 ~16초)이 붙고, 최대 6회 재시도 + 백오프(일시 오류 시 20·40초)까지 감안
-    timeout-minutes: 15
+    # Claude 웹 검색 수집은 1회 1~2.5분. 최대 6회 재시도 + 백오프(일시 오류 시 20~60초)와 링크 검증까지 감안
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -51,6 +62,12 @@ jobs:
 
       - name: Send daily briefing email
         env:
+          # Claude (MODEL이 claude-*일 때). 워크스페이스 전용 키면 ANTHROPIC_WORKSPACE_ID는 비워 둔다
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
+          NEWS_EFFORT: ${{ vars.NEWS_EFFORT }}
+          NEWS_MAX_SEARCHES: ${{ vars.NEWS_MAX_SEARCHES }}
+          # Gemini (기본 모델이 Gemini이거나, Claude 장애 시 백업)
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
@@ -64,11 +81,16 @@ jobs:
           # Jev 선별 모드 (기본 켜짐). Variables에 JEV_SELECT=shadow 를 두면 기록만 하고 메일은 그대로
           JEV_SELECT: ${{ vars.JEV_SELECT }}
           SKIP_EMAIL: ${{ inputs.skip_email == true && '1' || '' }}
+          # 월 환산 API 비용이 이 금액(USD)을 넘으면 메일·로그에 경고 (기본 50)
+          COST_ALERT_USD: ${{ vars.COST_ALERT_USD }}
+          # 어느 예약(cron)으로 시작했는지 → 예정 대비 지연 시간 기록
+          SCHEDULE_CRON: ${{ github.event.schedule }}
         run: node src/index.mjs
 
-      # skip_email 실행은 이력을 갱신하지 않으므로 저장할 것이 없다 (경고 방지)
+      # 이력(history.json)과 비용 원장(costs.json)을 함께 저장한다.
+      # skip_email 테스트도 API 비용은 들므로 저장한다 (이력은 갱신하지 않음).
       - name: Save briefing history
-        if: always() && inputs.skip_email != true
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: .briefing-state

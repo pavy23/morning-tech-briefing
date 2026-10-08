@@ -1,13 +1,17 @@
 // src/fetch-news.mjs
-// Gemini API + Google Search grounding으로 briefing.config.json에 정의된 주제의 뉴스를 수집
+// briefing.config.json에 정의된 주제의 뉴스를 웹 검색으로 수집한다.
+// MODEL이 claude-*이면 Claude + 웹 검색 도구(claude-news.mjs), 아니면 Gemini + Google Search grounding.
 
 import { config, categoryKeys, defaultCategory, normalizeCategory, quotasFor } from "./config.mjs";
+import { isClaudeModel, hasClaudeCredentials, fetchClaudeItems } from "./claude-news.mjs";
+import { recordUsage } from "./cost.mjs";
 
-const MODEL = process.env.MODEL || "gemini-2.5-flash";
-// 기본 모델이 503/429 같은 일시적 과부하로 거듭 실패할 때 쓸 백업 모델.
-// (그라운딩 품질은 다소 낮아도 "메일 누락"보다는 낫다. 같은 모델이면 폴백 비활성.)
-// 2.5-flash-lite는 2026-10-16 Gemini API에서 종료 예정이라 3.5-flash-lite를 기본값으로 둔다.
-const FALLBACK_MODEL = process.env.FALLBACK_MODEL || "gemini-3.5-flash-lite";
+const MODEL = process.env.MODEL || "claude-sonnet-5-5";
+// 기본 모델이 거듭 실패할 때 쓸 백업 모델 (같은 모델이면 폴백 비활성).
+// Claude가 기본이면 다른 회사의 Gemini 3.6 Flash로 넘겨 한쪽 API 장애·인증 오류에도 메일이 나가게 하고,
+// Gemini가 기본이면 기존처럼 3.5-flash-lite (2.5-flash-lite는 2026-10-16 종료 예정).
+const FALLBACK_MODEL = process.env.FALLBACK_MODEL ||
+  (isClaudeModel(MODEL) ? "gemini-3.6-flash" : "gemini-3.5-flash-lite");
 
 // 프롬프트는 설정 파일의 주제·카테고리·개수 배분으로 조립한다 (주제 변경 시 코드 수정 불필요).
 // want: 요청할 건수. Jev 선별이 켜지면 목표(total)보다 많이 받아 재탕·중복을 뺀 자리를 채운다.
@@ -129,6 +133,8 @@ function parseNewsList(raw) {
     };
     const headline = field("헤드라인");
     if (!headline) continue; // 잘린 마지막 블록 등
+    // Claude 형식에는 "URL:" 줄이 있다. <주소>·마크다운 링크로 감싸도 첫 주소만 뽑는다.
+    const url = (field("URL").match(/https?:\/\/[^\s<>()\]]+/) || [null])[0]?.replace(/[.,;]+$/, "") || null;
     items.push({
       id: heads[i].id,
       category: field("카테고리"),
@@ -137,7 +143,7 @@ function parseNewsList(raw) {
       source: field("출처"),
       keywords: field("검색어"),
       importance: /medium/i.test(field("중요도")) ? "medium" : "high",
-      url: null,
+      url,
       _start: heads[i].start,
       _end: end,
     });
@@ -185,6 +191,7 @@ function attachGroundingSources(items, text, groundingMetadata) {
 
 // 모델 세대별 출력 형식. NEWS_FORMAT=json|list 로 강제할 수 있다.
 export function outputFormatFor(model) {
+  if (isClaudeModel(model)) return "list"; // 출처는 검색 결과·인용으로 확인하므로 JSON 강제 불필요
   const forced = String(process.env.NEWS_FORMAT || "").trim().toLowerCase();
   if (forced === "json" || forced === "list") return forced;
   return /^gemini-3/.test(model) ? "list" : "json";
@@ -312,14 +319,21 @@ async function isAlive(url) {
 //   검색 대체 링크(newsSearchLink)로 바꾼다.
 //
 // 반환: { url, status, reason?, detail? }
-//   status = "grounded" : 그라운딩 리다이렉트 → 발행처 실제 기사 URL로 복원됨
+//   status = "grounded" : 그라운딩 리다이렉트 → 발행처 실제 기사 URL로 복원됨,
+//                         또는 Claude 웹 검색 결과에 실제로 나온 기사 주소(verified)
 //            "direct"   : 모델 직접 URL이 기사 형태이고 실제 접속됨
 //            "fallback" : 실패 → 검색 대체 링크. reason은 FALLBACK_REASON_LABEL의 키,
 //                         detail은 기사로 인정하지 못한 주소(있을 때)
-async function resolveLink(rawUrl, headline, chunkUris, keywords) {
+async function resolveLink(rawUrl, headline, chunkUris, keywords, verified = false) {
   const fallback = (reason, detail = "") =>
     ({ url: newsSearchLink(headline, keywords), status: "fallback", reason, detail });
   if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return fallback("no-source");
+
+  // Claude 웹 검색 결과에 그대로 나온 주소: 방금 검색 엔진이 가져온 페이지라 접속 확인은 생략한다
+  // (봇을 막는 언론사가 많아 Actions에서 확인하면 멀쩡한 기사도 403으로 떨어진다).
+  if (verified) {
+    return isLikelyArticle(rawUrl) ? { url: rawUrl, status: "grounded" } : fallback("not-article", shortUrl(rawUrl));
+  }
 
   if (rawUrl.includes("vertexaisearch.cloud.google.com")) {
     // 모델이 잘라먹은 URL을 정식 chunk URL로 복원한 뒤 발행처 기사 URL 추출
@@ -342,7 +356,7 @@ async function resolveLink(rawUrl, headline, chunkUris, keywords) {
 async function resolveAllLinks(items, chunkUris) {
   await Promise.all(
     items.map(async (it) => {
-      const { url, status, reason, detail } = await resolveLink(it.url, it.headline, chunkUris, it.keywords);
+      const { url, status, reason, detail } = await resolveLink(it.url, it.headline, chunkUris, it.keywords, it.sourceVerified);
       it.url = url;
       it.linkStatus = status;
       if (status === "fallback") {
@@ -385,9 +399,25 @@ const FALLBACK_AFTER = 3;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 재시도하면 풀릴 가능성이 있는 일시적 서버 오류(429 rate limit, 5xx 과부하)인지 판별
+// 오류의 HTTP 상태. Anthropic SDK 오류는 status 속성, Gemini 호출은 "Gemini API 503: ..." 메시지에 있다.
+function errorStatus(err) {
+  const s = Number(err?.status);
+  if (Number.isFinite(s) && s > 0) return s;
+  const m = String(err?.message || "").match(/\b([45]\d\d)\b/);
+  return m ? Number(m[1]) : 0;
+}
+// 재시도하면 풀릴 가능성이 있는 일시적 오류(429 rate limit, 5xx 과부하, Anthropic 529 overloaded, 연결 끊김)
 function isTransient(err) {
-  return /\b(429|500|502|503|504)\b/.test(String(err?.message || ""));
+  return [408, 429, 500, 502, 503, 504, 529].includes(errorStatus(err)) ||
+    /overloaded|ECONNRESET|socket hang up|Connection error|timed? ?out/i.test(String(err?.message || ""));
+}
+// 같은 모델로 다시 해도 소용없는 설정 오류(인증 정보 없음·잘못된 키·권한·모델 ID). 바로 백업 모델로 넘긴다.
+function isFatal(err) {
+  return [400, 401, 403, 404].includes(errorStatus(err));
+}
+// 모델을 부를 인증 정보가 있는지 (백업 모델로 넘길 수 있는지 판단)
+function hasCredentialsFor(model) {
+  return isClaudeModel(model) ? hasClaudeCredentials() : Boolean(process.env.GEMINI_API_KEY);
 }
 
 // 테스트에서 대기 시간을 줄이기 위한 배율 (운영에서는 미설정 = 1)
@@ -406,10 +436,22 @@ function transientBackoffMs(nth) {
   return Math.round(base * (0.75 + Math.random() * 0.5) * BACKOFF_SCALE);
 }
 
-// Gemini API 호출 + JSON 파싱만 담당 (링크 변환 제외).
-// { items, chunkUris, finishReason } 반환. 실패 시 throw.
-async function fetchRawItems(apiKey, model = MODEL, want = config.total) {
+// 모델 종류에 따라 Claude 또는 Gemini를 부르고 항목을 파싱한다 (링크 변환 제외).
+// { items, chunkUris, finishReason, format } 반환. 실패 시 throw.
+async function fetchRawItems(model = MODEL, want = config.total) {
   const todayKst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+  if (isClaudeModel(model)) return fetchClaudeItems(model, want, { todayKst, parseList: parseNewsList });
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    const e = new Error("GEMINI_API_KEY 환경변수가 없습니다");
+    e.status = 401;
+    throw e;
+  }
+  return fetchGeminiItems(apiKey, model, want, todayKst);
+}
+
+// Gemini API 호출 + 파싱
+async function fetchGeminiItems(apiKey, model, want, todayKst) {
   const format = outputFormatFor(model);
   const PROMPT = format === "list" ? buildListPrompt(config, want) : buildPrompt(config, want);
 
@@ -442,6 +484,15 @@ async function fetchRawItems(apiKey, model = MODEL, want = config.total) {
   }
 
   const data = await res.json();
+  // 비용 추정용 사용량 (thinking 토큰은 출력 요율로 과금된다)
+  const um = data?.usageMetadata;
+  if (um) {
+    recordUsage({
+      provider: "gemini", model, stage: "collect",
+      input: (um.promptTokenCount || 0) + (um.toolUsePromptTokenCount || 0),
+      output: (um.candidatesTokenCount || 0) + (um.thoughtsTokenCount || 0),
+    });
+  }
 
   // 응답 텍스트 추출
   const candidate = data?.candidates?.[0];
@@ -496,11 +547,13 @@ async function fetchRawItems(apiKey, model = MODEL, want = config.total) {
   return { items: parsed.items, chunkUris, finishReason: candidate.finishReason || "unknown", format };
 }
 
-// want: Gemini에 요청할 건수 (기본 config.total). 선별 단계가 있으면 config.candidates를 넘긴다.
+// want: 모델에 요청할 건수 (기본 config.total). 선별 단계가 있으면 config.candidates를 넘긴다.
 export async function fetchNews({ want = config.total } = {}) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY 환경변수가 없습니다");
-  console.log(`[fetch-news] 목표 ${config.total}건, 요청 ${want}건`);
+  // 백업 모델은 인증 정보가 있을 때만 쓴다 (예: Claude 기본 + GEMINI_API_KEY 있음 → Gemini로 넘김)
+  let fallbackBroken = false; // 백업 모델 자체가 실패(잘못된 ID, 할당량 0 등)하면 기본 모델로 복귀
+  const fallbackUsable = () =>
+    Boolean(FALLBACK_MODEL) && FALLBACK_MODEL !== MODEL && !fallbackBroken && hasCredentialsFor(FALLBACK_MODEL);
+  console.log(`[fetch-news] 목표 ${config.total}건, 요청 ${want}건 (모델 ${MODEL}, 백업 ${fallbackUsable() ? FALLBACK_MODEL : "없음"})`);
 
   // 항목이 너무 적으면(잘림) 또는 실제 기사 링크가 너무 적으면(그라운딩 누락=환각 의심)
   // 재시도하며, 가장 좋은 결과(실제 링크 수 → 항목 수 순)를 보관한다.
@@ -509,35 +562,34 @@ export async function fetchNews({ want = config.total } = {}) {
   let best = null;
   let lastErr = null;
   let transientFails = 0; // 기본 모델의 누적 일시 오류 수
-  let fallbackBroken = false; // 백업 모델 자체가 실패(잘못된 ID, 할당량 0 등)하면 기본 모델로 복귀
+  let primaryBroken = false; // 기본 모델의 설정 오류(인증·권한·모델 ID) → 남은 시도는 백업 모델로
   for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
-    // 기본 모델이 일시 오류로 거듭 막히면 백업 모델로 전환해 발송 누락을 막는다.
-    const useFallback =
-      !fallbackBroken &&
-      transientFails >= FALLBACK_AFTER && FALLBACK_MODEL && FALLBACK_MODEL !== MODEL;
+    // 기본 모델이 일시 오류로 거듭 막히거나 설정 오류로 못 쓰면 백업 모델로 전환해 발송 누락을 막는다.
+    const useFallback = fallbackUsable() && (primaryBroken || transientFails >= FALLBACK_AFTER);
+    if (primaryBroken && !useFallback) break; // 기본 모델은 고장, 백업도 없음 → 같은 오류만 반복된다
     const model = useFallback ? FALLBACK_MODEL : MODEL;
-    // 백업 모델은 출력이 잘리기 쉽고(2026-09-24: 9건에서 MAX_TOKENS) 그라운딩도 약하므로
+    // lite 백업 모델은 출력이 잘리기 쉽고(2026-09-24: 9건에서 MAX_TOKENS) 그라운딩도 약하므로
     // 후보를 넉넉히 받는 대신 목표 건수만 요청한다.
-    const askFor = useFallback ? Math.min(want, config.total) : want;
+    const askFor = useFallback && /lite/i.test(model) ? Math.min(want, config.total) : want;
     const minGrounded = minGroundedLinks(askFor);
     let waitMs = 0;
     try {
-      const r = await fetchRawItems(apiKey, model, askFor);
+      const r = await fetchRawItems(model, askFor);
       // 링크를 실제 기사 URL로 변환·검증 (만료/404/톱페이지 방지) + 품질 집계
       r.stats = await resolveAllLinks(r.items, r.chunkUris);
       r.model = model;
       r.minGrounded = minGrounded;
       console.log(
         `[fetch-news] 시도 ${attempt}/${MAX_FETCH_ATTEMPTS} ${model} (${r.format}): ` +
-        `항목 ${r.items.length}개, 그라운딩 chunk ${r.chunkUris.length}개, ` +
+        `항목 ${r.items.length}개, 검색 출처 ${r.chunkUris.length}개, ` +
         `실제 기사 링크 ${r.stats.real}/${r.stats.total} ` +
-        `(리다이렉트 복원 ${r.stats.grounded}, 직접 URL ${r.stats.direct}, 검색 폴백 ${r.stats.fallback}), ` +
+        `(출처 확인 ${r.stats.grounded}, 직접 URL ${r.stats.direct}, 검색 폴백 ${r.stats.fallback}), ` +
         `finishReason: ${r.finishReason}`
       );
       if (isBetter(r, best)) best = r;
 
       const enoughItems = r.items.length >= MIN_ITEMS;
-      // 기본 모델이 그라운딩 chunk를 하나도 안 돌려줬다면 Google 검색이 실행되지 않은 것
+      // 기본 모델이 검색 출처를 하나도 안 돌려줬다면 웹 검색이 실행되지 않은 것
       // (2026-09-25: chunk 0개, 직접 URL 3건이 살아 있어 개수 기준만으로는 통과했던 환각 배치).
       // 백업 모델은 chunk 없이도 리다이렉트 URL을 주는 경우가 있어 개수 기준만 적용한다.
       const noSearch = !useFallback && r.chunkUris.length === 0 && minGrounded > 0;
@@ -551,13 +603,13 @@ export async function fetchNews({ want = config.total } = {}) {
         );
       } else if (noSearch) {
         console.error(
-          `[fetch-news] ${model}: 그라운딩 chunk 0개 — Google 검색 미실행(환각 배치) 의심 → ` +
+          `[fetch-news] ${model}: 검색 출처 0개 — 웹 검색 미실행(환각 배치) 의심 → ` +
           `재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}`
         );
       } else {
         console.error(
           `[fetch-news] ${model}: 실제 기사 링크가 ${r.stats.real}개뿐(최소 ${minGrounded}개). ` +
-          `Google 검색 그라운딩 누락(환각 배치) 의심 → 재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}`
+          `검색 근거 누락(환각 배치) 의심 → 재시도 ${attempt}/${MAX_FETCH_ATTEMPTS}`
         );
       }
       waitMs = backoffMs(attempt);
@@ -567,10 +619,18 @@ export async function fetchNews({ want = config.total } = {}) {
         // 백업 모델이 실패하면 남은 시도는 기본 모델로 (모델 ID 오류·할당량 0 등은 재시도해도 같다)
         fallbackBroken = true;
         console.error(
-          `[fetch-news] 백업 모델 ${model} 호출 실패: ${e.message} → 기본 모델 ${MODEL}로 복귀 ` +
+          `[fetch-news] 백업 모델 ${model} 호출 실패: ${e.message} → ` +
+          `${primaryBroken ? "기본 모델도 쓸 수 없어 중단" : `기본 모델 ${MODEL}로 복귀`} ` +
           `(재시도 ${attempt}/${MAX_FETCH_ATTEMPTS})`
         );
-        waitMs = transientBackoffMs(transientFails);
+        waitMs = primaryBroken ? 0 : transientBackoffMs(Math.max(1, transientFails));
+      } else if (isFatal(e)) {
+        primaryBroken = true;
+        console.error(
+          `[fetch-news] ${model} 설정 오류: ${e.message} → ` +
+          `${fallbackUsable() ? `백업 모델 ${FALLBACK_MODEL}로 전환` : "백업 모델이 없어 중단"} ` +
+          `(재시도 ${attempt}/${MAX_FETCH_ATTEMPTS})`
+        );
       } else if (isTransient(e)) {
         transientFails++;
         console.error(
@@ -578,7 +638,7 @@ export async function fetchNews({ want = config.total } = {}) {
           `일시 오류 ${transientFails}/${FALLBACK_AFTER}회 — 이후 백업 모델 전환)`
         );
         // 다음 시도가 백업 모델이면 기다릴 이유가 없다 (다른 모델의 용량)
-        const switching = transientFails >= FALLBACK_AFTER && FALLBACK_MODEL && FALLBACK_MODEL !== MODEL;
+        const switching = transientFails >= FALLBACK_AFTER && fallbackUsable();
         waitMs = switching ? 0 : transientBackoffMs(transientFails);
       } else {
         console.error(
