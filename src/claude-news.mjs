@@ -5,7 +5,7 @@
 // 그대로 오므로, 모델이 쓴 URL을 검색 결과 목록과 대조해 "검색으로 확인된 기사"인지 코드로 판별한다.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { config, quotasFor } from "./config.mjs";
+import { config, quotasFor, normalizeCategory } from "./config.mjs";
 import { recordUsage } from "./cost.mjs";
 
 export function isClaudeModel(model) {
@@ -27,6 +27,11 @@ function intEnv(name, fallback) {
 
 // 검색 한 번에 $0.01. 한도를 넘긴 검색은 실패로 돌아오므로 프롬프트에도 같은 숫자를 알려 준다.
 export const searchBudget = () => intEnv("NEWS_MAX_SEARCHES", 25);
+// 분야가 모자랄 때 그 분야만 더 찾는 보충 요청의 검색 한도. 0이면 보충 안 함.
+const topupBudget = () => {
+  const raw = String(process.env.NEWS_TOPUP_SEARCHES ?? "").trim();
+  return raw !== "" && Number.isFinite(Number(raw)) ? Math.max(0, Math.floor(Number(raw))) : 10;
+};
 const effortLevel = () => String(process.env.NEWS_EFFORT || "medium").trim().toLowerCase();
 // 서버 쪽 검색 루프는 10회 반복마다 pause_turn으로 멈춘다. 그대로 돌려보내 이어 가게 하는 횟수 상한.
 const MAX_CONTINUATIONS = 5;
@@ -56,6 +61,7 @@ URL: 검색 결과에 나온 그 기사의 주소 그대로
 - 게시 시점: 오늘(KST) 기준 최근 24시간 이내 기사를 우선하고, 모자라면 48시간 이내 기사로 채웁니다. 그보다 오래됐거나 게시 시점을 확인할 수 없는 기사는 넣지 않습니다.
 - URL은 검색 결과에 실제로 나온 개별 기사 주소만 씁니다. 홈페이지·섹션 페이지·추측한 주소는 쓰지 않습니다.
 - 출처는 처음 보도한 언론사나 회사·기관의 공식 발표를 우선하고, 다른 기사를 옮겨 실은 집계·요약 사이트는 피합니다.
+- 여러 소식을 묶은 요약 페이지(뉴스레터, "오늘의 AI 뉴스" 모음 등)의 주소는 쓰지 않습니다. 거기서 본 소식은 원 기사를 다시 검색해 그 주소를 씁니다.
 - 분야별 권장 건수를 채우는 것을 우선합니다. 한 분야의 기사가 모자라면 그 분야를 다른 검색어(회사·제품 이름, 영어 검색어 등)로 다시 검색합니다.
 - 웹 검색은 최대 ${budget}회까지 쓸 수 있고, 한도를 넘기면 그 검색은 실패합니다. 분야마다 고르게 나눠 쓰세요.
 - 카테고리는 반드시 ${allowed} 중 하나, 중요도는 high 또는 medium
@@ -197,20 +203,95 @@ function sumUsage(responses) {
   return u;
 }
 
-// Claude 호출 + 목록 파싱 + 출처 확인. parseList는 fetch-news.mjs의 "### N" 파서를 받는다.
+// 분야별로 "기사 주소가 확인된" 항목이 선별에 필요한 수(설정 count + 여유 1)보다 적으면
+// 권장 건수까지 채우도록 더 찾을 건수를 돌려준다. 예: 2026-10-08 Actions 실행은 로봇 후보가 2건뿐이었고
+// 둘 다 재탕으로 빠져 발송 목록에 로봇 분야가 0건이 됐다.
+export function categoryShortfall(items, want, isArticle, cfg = config) {
+  const quotas = quotasFor(want, cfg);
+  const have = {};
+  for (const it of items) {
+    if (!it.sourceVerified || !isArticle(it.url)) continue;
+    const key = normalizeCategory(it.category);
+    if (key) have[key] = (have[key] || 0) + 1;
+  }
+  return cfg.categories
+    .map((c) => {
+      const target = quotas.find((q) => q.key === c.key)?.count ?? c.count;
+      const got = have[c.key] || 0;
+      return { key: c.key, need: got < c.count + 1 ? Math.max(0, target - got) : 0 };
+    })
+    .filter((x) => x.need > 0);
+}
+
+// 보충은 첫 대화를 잇지 않고 짧은 새 대화로 보낸다. 첫 대화를 이으면 앞의 검색 결과 전체(30만 토큰 안팎)가
+// 캐시에 다시 쓰여 1회 비용이 두 배($0.84 → $1.70, 2026-10-08 실측)가 됐다. 새 대화로는 $1.16.
+// 기사가 드문 분야를 채우려는 것이라 게시 시점은 72시간까지 허용한다 (재탕은 Jev가 이력과 비교해 거른다).
+export function buildTopupPrompt(short, existing, nextNo, budget, cfg = config) {
+  const scope = short
+    .map((x) => {
+      const c = cfg.categories.find((cat) => cat.key === x.key);
+      return `- ${x.key} ${x.need}건${c?.description ? `: ${c.description}` : ""}`;
+    })
+    .join("\n");
+  const taken = existing.map((it) => `- [${it.category}] ${it.headline} (${it.source})`).join("\n");
+  return `당신은 글로벌 테크 뉴스 에디터입니다.
+웹 검색으로 아래 분야의 최신 글로벌 주요 뉴스를 찾아, 각 뉴스를 아래 형식의 항목으로 정리하세요.
+
+찾을 분야와 건수:
+${scope}
+
+이미 고른 기사 (같은 사건은 넣지 않습니다):
+${taken}
+
+### ${nextNo}
+카테고리: ${short[0].key}
+헤드라인: 한국어 헤드라인 (60자 이내)
+요약: 핵심 내용 요약 (100~150자 한국어). 검색으로 확인한 사실만 쓰고, 기사에 있는 구체적 수치·고유명사를 포함하세요.
+출처: 출처 언론사명
+URL: 검색 결과에 나온 그 기사의 주소 그대로
+검색어: 원문 기사를 다시 찾을 수 있는 키워드 3~4개. 원문 기사 제목에 나오는 회사·제품·인물 같은 고유명사 위주로, 원문 기사의 언어 그대로 씁니다 (영어 기사면 영어).
+중요도: high
+
+규칙:
+- 게시 시점: 오늘(KST) 기준 최근 48시간 이내 기사를 우선하고, 모자라면 72시간 이내 기사로 채웁니다. 그보다 오래됐거나 게시 시점을 확인할 수 없는 기사는 넣지 않습니다.
+- URL은 검색 결과에 실제로 나온 개별 기사 주소만 씁니다. 홈페이지·섹션 페이지·추측한 주소는 쓰지 않습니다.
+- 출처는 처음 보도한 언론사나 회사·기관의 공식 발표를 우선하고, 여러 소식을 묶은 요약 페이지의 주소는 쓰지 않습니다.
+- 웹 검색은 최대 ${budget}회까지 쓸 수 있고, 한도를 넘기면 그 검색은 실패합니다.
+- 중요도는 high 또는 medium
+- 번호는 ${nextNo}번부터 이어 쓰고, 각 항목은 "### 번호"로 시작해 위 일곱 줄만 씁니다. 머리말·맺음말·표는 쓰지 않습니다.
+- 찾지 못하면 찾은 만큼만 씁니다.`;
+}
+
+// 같은 항목이 두 번 나오면(보충 단계에서 반복 등) 앞의 것만 남긴다. 요약 페이지 주소는 여러 소식이
+// 공유하므로 주소가 아니라 헤드라인으로만 비교한다.
+function dedupeItems(items, isArticle) {
+  const seen = new Set();
+  return items.filter((it) => {
+    const keys = [`h:${it.headline.replace(/\s+/g, "")}`];
+    if (it.sourceVerified && isArticle(it.url)) keys.push(`u:${normalizeUrl(it.url)}`);
+    if (keys.some((k) => seen.has(k))) return false;
+    keys.forEach((k) => seen.add(k));
+    return true;
+  });
+}
+
+// Claude 호출 + 목록 파싱 + 출처 확인 (+ 모자란 분야 보충).
+// parseList는 fetch-news.mjs의 "### N" 파서, isArticle은 기사 주소 판별 함수를 받는다.
 // 반환 형태는 Gemini 경로와 같다: { items, chunkUris, finishReason, format }
-export async function fetchClaudeItems(model, want, { todayKst, parseList }) {
+export async function fetchClaudeItems(model, want, { todayKst, parseList, isArticle = () => true }) {
   const budget = searchBudget();
-  const tool = { type: webSearchToolFor(), name: "web_search", max_uses: budget };
-  const messages = [{ role: "user", content: `오늘은 ${todayKst} (KST)입니다.\n\n${buildClaudePrompt(config, want, budget)}` }];
   const responses = [];
-  try {
+
+  // 한 번의 요청(검색 루프 포함)을 끝까지 받는다. 서버 검색 루프가 pause_turn으로 멈추면 그대로 이어 보낸다.
+  async function converse(prompt, maxUses) {
+    const conversation = [{ role: "user", content: `오늘은 ${todayKst} (KST)입니다.\n\n${prompt}` }];
+    const tool = { type: webSearchToolFor(), name: "web_search", max_uses: maxUses };
     for (let turn = 0; turn < MAX_CONTINUATIONS; turn++) {
       const msg = await claudeClient().messages
         .stream({
           model,
           max_tokens: 32000,
-          messages,
+          messages: conversation,
           tools: [tool],
           output_config: { effort: effortLevel() },
           // 자동 캐싱: 검색 루프가 결과 뒤에 캐시 지점을 넣어, 반복마다 다시 읽는 앞부분이 캐시 읽기
@@ -219,36 +300,61 @@ export async function fetchClaudeItems(model, want, { todayKst, parseList }) {
         })
         .finalMessage();
       responses.push(msg);
-      if (msg.stop_reason !== "pause_turn") break;
-      messages.push({ role: "assistant", content: msg.content });
+      conversation.push({ role: "assistant", content: msg.content });
+      if (msg.stop_reason !== "pause_turn") return msg;
+    }
+    return responses[responses.length - 1];
+  }
+
+  function parseAll() {
+    const collected = collectResponse(responses);
+    if (!collected.text.trim()) {
+      throw new Error(`Claude 텍스트 응답 없음. stop_reason: ${responses.at(-1)?.stop_reason}`);
+    }
+    const parsed = parseList(collected.text);
+    verifyAgainstResults(parsed.items, collected);
+    for (const it of parsed.items) {
+      delete it._start;
+      delete it._end;
+    }
+    return { collected, items: dedupeItems(parsed.items, isArticle) };
+  }
+
+  let result;
+  let topup = null;
+  try {
+    await converse(buildClaudePrompt(config, want, budget), budget);
+    result = parseAll();
+    const short = categoryShortfall(result.items, want, isArticle);
+    const extraBudget = topupBudget();
+    if (short.length && extraBudget > 0 && result.items.length > 0) {
+      const before = result.items.length;
+      await converse(buildTopupPrompt(short, result.items, before + 1, extraBudget), extraBudget);
+      result = parseAll();
+      topup = { short, added: result.items.length - before };
     }
   } finally {
     // 실패한 시도라도 이미 받은 응답의 사용량은 비용에 넣는다
     if (responses.length) recordUsage({ provider: "anthropic", model, stage: "collect", ...sumUsage(responses) });
   }
 
-  const last = responses[responses.length - 1];
+  const { collected, items } = result;
   const usage = sumUsage(responses);
-  const collected = collectResponse(responses);
-  if (!collected.text.trim()) throw new Error(`Claude 텍스트 응답 없음. stop_reason: ${last?.stop_reason}`);
-  const parsed = parseList(collected.text);
-  verifyAgainstResults(parsed.items, collected);
-  for (const it of parsed.items) {
-    delete it._start;
-    delete it._end;
-  }
-  const verified = parsed.items.filter((it) => it.sourceVerified).length;
-  const fresh = parsed.items.filter((it) => it.ageHours != null && it.ageHours <= 48).length;
+  const verified = items.filter((it) => it.sourceVerified).length;
+  const fresh = items.filter((it) => it.ageHours != null && it.ageHours <= 48).length;
+  const counts = {};
+  for (const it of items) counts[it.category] = (counts[it.category] || 0) + 1;
   console.log(
-    `[fetch-news] Claude ${model} (${tool.type}, effort ${effortLevel()}): 검색 ${usage.searches}회` +
+    `[fetch-news] Claude ${model} (${webSearchToolFor()}, effort ${effortLevel()}): 검색 ${usage.searches}회` +
     `${collected.searchErrors.length ? ` (실패 ${collected.searchErrors.join(",")})` : ""}, 결과 URL ${collected.results.size}개 → ` +
-    `항목 ${parsed.items.length}개, 검색 결과로 확인된 주소 ${verified}개, 48시간 이내 ${fresh}개 | ` +
-    `토큰 입력 ${usage.input}·출력 ${usage.output}`
+    `항목 ${items.length}개 (${Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(" · ")}), ` +
+    `검색 결과로 확인된 주소 ${verified}개, 48시간 이내 ${fresh}개 | 토큰 입력 ${usage.input}·출력 ${usage.output}` +
+    (topup ? ` | 보충: ${topup.short.map((x) => `${x.key} ${x.need}`).join("·")}건 요청 → ${topup.added}건 추가` : "")
   );
   return {
-    items: parsed.items,
+    items,
     chunkUris: [...collected.results.values()].map((r) => r.url),
-    finishReason: last?.stop_reason || "unknown",
+    finishReason: responses.at(-1)?.stop_reason || "unknown",
     format: "list",
   };
 }

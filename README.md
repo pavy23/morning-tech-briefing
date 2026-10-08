@@ -9,7 +9,7 @@ Every morning **before 09:00 KST** this project collects the day's top global ne
 - 🧪 **TypeSafe (Jev) judgments** drop repeats from earlier days, same-day duplicates, generic commentary and off-topic items, then keep 10 (optional, about $0.01 a day)
 - 📧 **Resend** delivers the HTML email (free tier: 3,000 a month)
 - 🎨 The same card design as the web app
-- 💸 **API cost shown automatically**: the email footer and the Actions run summary show this run, month to date and a monthly run rate, with a warning above a threshold (default $50). Expect about $25–27 a month with Sonnet 5.5
+- 💸 **API cost shown automatically**: the email footer and the Actions run summary show this run, month to date and a monthly run rate, with a warning above a threshold (default $50). Expect about $25–35 a month with Sonnet 5.5
 
 The prompts and the email copy are in Korean. See [Changing the topics](#-changing-the-topics--briefingconfigjson) for how to adapt them.
 
@@ -79,6 +79,7 @@ In the repository: **Settings → Secrets and variables → Actions → "New rep
 > - `MODEL` — collection model. Defaults to `claude-sonnet-5-5`. Use `claude-haiku-5-5` to cut cost, or `gemini-3.6-flash` to go back to Gemini
 > - `FALLBACK_MODEL` — backup when the primary model fails. Empty means `gemini-3.6-flash` for a Claude primary and `gemini-3.5-flash-lite` for a Gemini primary; setting it equal to `MODEL` disables the fallback
 > - `NEWS_EFFORT` (default `medium`), `NEWS_MAX_SEARCHES` (default 25) — Claude's effort level and its web-search cap per run (each search costs $0.01)
+> - `NEWS_TOPUP_SEARCHES` (default 10) — search cap of the top-up request that looks for more stories in categories that came up short; 0 disables it
 > - `COST_ALERT_USD` (default 50) — warn in the email and in Actions when the monthly run rate exceeds this many USD
 > - `ANTHROPIC_WORKSPACE_ID` — only for a personal key that is not scoped to a workspace (`wrkspc_...`)
 >
@@ -124,6 +125,8 @@ src/index.mjs  (topics, categories and colors come from briefing.config.json)
 3. If neither exists the address may be made up, so it is fetched directly, and a failure falls back to the search link below
 
 Measured on 2026-10-08 (Sonnet 5.5, three runs): all 16–18 items had an address confirmed by the search results, and 0–3 of them were digest or listing pages that became search links. After the prompt began asking for the original publisher or the official announcement, all 18 were article links.
+
+**Category top-up** — how many stories one request returns varies from 10 to 18 a day. The 2026-10-08 Actions check got only 12, and both robotics candidates were dropped as repeats, so the briefing had no robotics story. So when a category has fewer stories with a confirmed article address than selection needs (the config `count` + 1), a **short fresh request** looks for more in just those categories (up to `NEWS_TOPUP_SEARCHES` searches, publication up to 72 hours old, with the stories already chosen listed to avoid duplicates). Continuing the first conversation instead re-wrote its search results to the cache and cost $1.70 a run; the fresh request cost $1.16.
 
 **Gemini (backup)** — The URLs Gemini returns are either Google grounding redirects (which expire and 404 later) or addresses the
 model made up. So `fetch-news.mjs` does the following **at collection time**:
@@ -316,13 +319,13 @@ the avatar empty is recommended (it has no effect on functionality).
 
 ---
 
-## 💰 Cost — about $25–27 a month with Claude Sonnet 5.5
+## 💰 Cost — about $25–35 a month with Claude Sonnet 5.5
 
 | Item | Cost |
 |------|------|
 | GitHub Actions | Free (free for public repos; 2,000 minutes a month for private ones). A sending run takes 2–3 minutes; the remaining schedules on a day already sent exit in seconds |
 | Resend | Free (3,000 a month; this uses 30) |
-| Claude API — `claude-sonnet-5-5` (default) | Measured 2026-10-08: **$0.83–0.89 a run** = 24–25 web searches ($0.24–0.25) + about $0.6 of tokens (190k–210k cache writes, 300k–410k cache reads, about 8k output) → **about $25–27 a month** |
+| Claude API — `claude-sonnet-5-5` (default) | Measured 2026-10-08: **$0.83–0.89 a run** without a top-up = 24–25 web searches ($0.24–0.25) + about $0.6 of tokens (190k–210k cache writes, 300k–410k cache reads, about 8k output); **$1.16** with a category top-up → **about $25–35 a month** |
 | Claude API — `claude-haiku-5-5` (optional) | Same day, same settings: $0.29–0.47 a run → about $9–14 a month |
 | Gemini API (backup) | Used only when Claude fails. `gemini-3.6-flash`: about 1k input + 10k output tokens a run (thinking included) → about $0.04 (introductory price; about $0.08 from 2027). Grounded searches are free up to 5,000 a month |
 | TypeSafe (Jev) | Optional. 41 requests and about 220k input tokens a day → **about $0.01 a day, $0.3 a month** (input $0.042/M, output free). One 87-day backtest is about $0.3 |
@@ -412,7 +415,7 @@ Free-tier limits vary by model and date; check the Google AI Studio pricing page
 - The average of recent sends × 30 exceeded `COST_ALERT_USD` (default $50). Set `MODEL` to `claude-haiku-5-5` or lower `NEWS_MAX_SEARCHES`; change the threshold itself with `COST_ALERT_USD`
 
 **Claude returns only a dozen or so candidates, or a category is empty**
-- It includes only stories whose date and address it confirmed by search (16–18 when measured). If a category is often empty, raise `NEWS_MAX_SEARCHES` to 30 (each search costs $0.01)
+- It includes only stories whose date and address it confirmed by search (10–18 when measured). Short categories get a top-up request; the log line `보충: … 요청 → N건 추가` (top-up requested → N added) shows it. If categories are still often short, raise `NEWS_TOPUP_SEARCHES` (default 10) or `NEWS_MAX_SEARCHES` (default 25); each search costs $0.01
 
 **"GEMINI_API_KEY 환경변수가 없습니다" (with a Gemini primary model) / "TO_EMAIL 환경변수가 없습니다"** (environment variable missing)
 - A Secret from step 3 is missing or misspelled. Names are case-sensitive

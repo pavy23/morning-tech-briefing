@@ -440,7 +440,9 @@ function transientBackoffMs(nth) {
 // { items, chunkUris, finishReason, format } 반환. 실패 시 throw.
 async function fetchRawItems(model = MODEL, want = config.total) {
   const todayKst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
-  if (isClaudeModel(model)) return fetchClaudeItems(model, want, { todayKst, parseList: parseNewsList });
+  if (isClaudeModel(model)) {
+    return fetchClaudeItems(model, want, { todayKst, parseList: parseNewsList, isArticle: isLikelyArticle });
+  }
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     const e = new Error("GEMINI_API_KEY 환경변수가 없습니다");

@@ -67,6 +67,7 @@ jobs:
           ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
           NEWS_EFFORT: ${{ vars.NEWS_EFFORT }}
           NEWS_MAX_SEARCHES: ${{ vars.NEWS_MAX_SEARCHES }}
+          NEWS_TOPUP_SEARCHES: ${{ vars.NEWS_TOPUP_SEARCHES }}
           # Gemini (기본 모델이 Gemini이거나, Claude 장애 시 백업)
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
