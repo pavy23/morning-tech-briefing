@@ -13,6 +13,7 @@ import {
   formatCostLine, formatCostSummary, isOverBudget,
 } from "./cost.mjs";
 import { config } from "./config.mjs";
+import { assertSecretsResolved } from "./secrets.mjs";
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 
@@ -75,6 +76,8 @@ async function main() {
     console.log(`[schedule] ${today} 브리핑은 이미 발송됨 → 이번 예약 실행은 건너뜁니다`);
     return;
   }
+  // Secrets에 넣은 1Password 참조가 키로 바뀌지 않았으면 API를 부르기 전에 멈춘다
+  assertSecretsResolved();
   console.log("");
 
   // API를 부르는 동안 쌓인 사용량은 성공·실패와 관계없이 비용 원장에 남긴다

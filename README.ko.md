@@ -66,6 +66,7 @@ git push -u origin main
 | `FROM_EMAIL` | `Morning Tech Briefing <onboarding@resend.dev>` |
 | `TYPESAFE_API_KEY` | (선택) `ts_...` — [TypeSafe](https://typesafe.ai) 키. 있으면 Jev 판정·선별이 켜짐 (아래 🧪 절 참고) |
 | `READER_PROFILE` | (선택) 관련도 판정용 독자 프로필. JSON 한 줄, 예: `{"role":"...","strong_interests":["..."],"weak_interests":["..."]}`. 개인정보라 Secret으로 등록. 없으면 일반 프로필 |
+| `OP_SERVICE_ACCOUNT_TOKEN` | (선택) 1Password 서비스 계정 토큰. 있으면 위 API 키 Secret에 키 대신 1Password 비밀 참조(`op://…`)를 넣을 수 있음 (아래 🔐 절 참고) |
 
 > **공개 저장소로 전환해도 Secrets는 노출되지 않습니다.** Secrets는 저장소 파일이 아니라 GitHub가 암호화해
 > 보관하는 값이며, 워크플로우 실행 시에만 주입되고 로그에서는 `***`로 가려집니다. 단, 공개 저장소는
@@ -226,6 +227,7 @@ npm start
 ```
 
 콘솔에 후보 목록·판정·발송 목록이 뜨고, 메일이 발송됩니다. `SKIP_EMAIL=1 npm start`로 발송 없이 확인할 수 있습니다.
+`.env`의 API 키 자리에 1Password 비밀 참조(`op://…`)를 넣었다면 1Password CLI로 `op run --env-file=.env -- npm start`처럼 실행합니다.
 
 ---
 
@@ -301,6 +303,25 @@ npm start
 3. 인증 완료 후 `FROM_EMAIL` Secret을 `Morning Tech Briefing <noreply@yourdomain.com>`로 변경
 
 도메인 인증을 하면 **임의의 수신자**에게도 발송 가능하고, 스팸함에 덜 들어갑니다.
+
+---
+
+## 🔐 (선택) API 키를 1Password로 관리
+
+API 키를 GitHub Secrets에 직접 넣는 대신 1Password에 두고, 실행할 때마다 1Password에서 읽어 오게 할 수 있습니다. 그 뒤로 키를 바꿀 때는 1Password 항목만 고치면 됩니다.
+
+1. 1Password에 이 브리핑 전용 볼트를 만들고 API 키 항목을 넣습니다. 서비스 계정은 기본 볼트(Personal·Private·Employee, 기본 Shared)에는 접근할 수 없습니다
+2. 각 항목의 키 필드에서 **비밀 참조 복사(Copy Secret Reference)** → `op://볼트/항목/필드` 형식의 참조가 복사됩니다
+3. 1Password에서 서비스 계정을 만들어 그 볼트에 **읽기** 권한만 주고, 발급된 토큰을 Secret `OP_SERVICE_ACCOUNT_TOKEN`으로 등록합니다
+4. Secrets의 `ANTHROPIC_API_KEY`·`GEMINI_API_KEY`·`RESEND_API_KEY`·`TYPESAFE_API_KEY`를 하나씩 **Update** 해서 키 대신 2에서 복사한 참조를 넣습니다
+5. 4단계처럼 `skip_email`을 체크해 수동 실행합니다. `Load API keys from 1Password` 단계에 키마다 `Populating variable: …` 줄이 보이고 뉴스 수집까지 끝나면 성공
+
+동작 방식:
+- 워크플로가 1Password 공식 Action([`1password/load-secrets-action`](https://github.com/1Password/load-secrets-action) v5.0.1, 커밋 SHA로 고정)으로 참조를 실제 키로 바꿔 다음 단계에 넘깁니다. 키 값은 로그에서 `***`로 가려집니다
+- `OP_SERVICE_ACCOUNT_TOKEN`이 없으면 이 단계를 건너뛰고 Secrets 값을 그대로 씁니다. 참조가 아닌 값(기존 키)도 그대로 쓰므로 Secrets를 하나씩 옮겨도 발송이 끊기지 않습니다
+- 참조를 하나라도 못 읽으면(항목 삭제, 볼트 권한 없음 등) 그 실행은 이 단계에서 멈춥니다. 고치면 그날 다음 예약 실행이 보냅니다
+- 1Password에서 볼트·항목·필드 이름을 바꾸면 참조가 달라질 수 있으니, 다시 복사해 Secret을 고칩니다
+- `TO_EMAIL`·`FROM_EMAIL`·`READER_PROFILE`은 API 키가 아니라서 Secrets에 그대로 둡니다
 
 ---
 
@@ -417,6 +438,12 @@ Gemini 2026년 단가 정리([CloudZero](https://www.cloudzero.com/blog/gemini-p
 **"GEMINI_API_KEY 환경변수가 없습니다"** (Gemini가 기본 모델일 때) / **"TO_EMAIL 환경변수가 없습니다"**
 - 3단계 Secrets 등록을 빠뜨렸거나 이름 오타. 대소문자 정확히 일치해야 함
 
+**"1Password 참조가 실제 키로 바뀌지 않았습니다"**
+- Secret에 `op://…` 참조를 넣었는데 `OP_SERVICE_ACCOUNT_TOKEN`이 없어 1Password 단계를 건너뛰었거나, 1Password 항목의 값이 비어 있는 것. 토큰 Secret 이름과 항목 값을 확인
+
+**`Load API keys from 1Password` 단계 실패**
+- 바로 위 `Populating variable: …` 줄의 키를 못 읽은 것. 서비스 계정에 그 볼트의 읽기 권한이 있는지, 참조를 복사한 뒤 볼트·항목·필드 이름이 바뀌지 않았는지, 토큰이 폐기되지 않았는지 확인
+
 **"Gemini API 429" (quota/rate limit)**
 - 무료 등급은 분당 요청 수 제한(예: `limit: 20`)이 있음. **하루 1회 자동 발송은 절대 안 걸리지만**, 짧은 시간에 테스트를 여러 번 돌리면 일시적으로 초과됨 → 1~2분 뒤 재시도하면 풀림
 - `gemini-3.5-flash`로 바꾼 뒤 계속 429라면, 그 키엔 해당 모델의 무료 grounded 할당량이 없는 것 → `MODEL`을 `gemini-2.5-flash`로 변경
@@ -465,12 +492,13 @@ Claude Code가 `git`, `gh secret set`, `gh workflow run` 명령을 순서대로 
 ```
 morning-tech-briefing/
 ├── .github/workflows/
-│   ├── daily.yml                 # 매일 아침 cron 4회(먼저 시작한 실행만 발송), 이력·비용 캐시, 판정 리포트 아티팩트
+│   ├── daily.yml                 # 매일 아침 cron 4회(먼저 시작한 실행만 발송), 1Password 키 로드(선택), 이력·비용 캐시, 판정 리포트 아티팩트
 │   └── backtest.yml              # 과거 90일치로 Jev 판정 일괄 검증 (수동 실행)
 ├── briefing.config.json          # 주제·카테고리·개수·색상 정의 (주제 바꾸려면 여기)
 ├── src/
 │   ├── index.mjs                 # 메인 엔트리: 수집 → 판정 → 선별 → 발송 → 이력 기록
 │   ├── config.mjs                # briefing.config.json 로더·검증
+│   ├── secrets.mjs               # API 키에 1Password 참조가 풀리지 않은 채 들어왔는지 점검
 │   ├── fetch-news.mjs            # 뉴스 수집(모델별 분기·재시도·백업 전환) + 링크 검증 + 환각 배치 가드
 │   ├── claude-news.mjs           # Claude + 웹 검색 수집, 기사 주소를 검색 결과와 대조
 │   ├── cost.mjs                  # API 비용 추정·원장(.briefing-state/costs.json)·월 환산

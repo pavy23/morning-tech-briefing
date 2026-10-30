@@ -19,6 +19,9 @@ jobs:
   backtest:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # 1Password 서비스 계정 토큰이 등록돼 있을 때만 TYPESAFE_API_KEY를 1Password에서 읽는다 (daily.yml과 같은 방식)
+      USE_1PASSWORD: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
 
     steps:
       - name: Checkout
@@ -39,9 +42,19 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: node scripts/extract-history.mjs backtest/days.json
 
+      - name: Load API keys from 1Password
+        id: op
+        if: env.USE_1PASSWORD == 'true'
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+
       - name: Run Jev backtest
         env:
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          TYPESAFE_API_KEY: ${{ steps.op.outputs.TYPESAFE_API_KEY || secrets.TYPESAFE_API_KEY }}
           READER_PROFILE: ${{ secrets.READER_PROFILE }}
           BACKTEST_SAMPLE: ${{ inputs.sample }}
         run: node scripts/backtest.mjs backtest/days.json backtest
