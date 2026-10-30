@@ -36,6 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     # Claude 웹 검색 수집은 1회 1~2.5분. 최대 6회 재시도 + 백오프(일시 오류 시 20~60초)와 링크 검증까지 감안
     timeout-minutes: 25
+    env:
+      # 1Password 서비스 계정 토큰이 등록돼 있을 때만 아래 "Load API keys from 1Password" 단계를 돌린다
+      USE_1PASSWORD: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
 
     steps:
       - name: Checkout
@@ -60,18 +63,35 @@ jobs:
           restore-keys: |
             briefing-state-
 
+      # Secrets에 키 대신 1Password 비밀 참조(op://볼트/항목/필드)를 넣어 두면 여기서 실제 키로 바꾼다.
+      # 참조가 아닌 값(기존 키)은 건드리지 않으므로 Secrets를 하나씩 옮겨도 발송이 끊기지 않는다.
+      # 참조를 하나라도 못 읽으면 이 단계에서 실패한다. 키를 다루는 외부 Action이라 커밋 SHA로 고정.
+      - name: Load API keys from 1Password
+        id: op
+        if: env.USE_1PASSWORD == 'true'
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false # 키는 이 단계의 출력(steps.op.outputs.*)으로만 넘긴다
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+
       - name: Send daily briefing email
         env:
+          # API 키 4개는 1Password에서 읽은 값이 있으면 그 값, 없으면 Secrets 값을 그대로 쓴다
           # Claude (MODEL이 claude-*일 때). 워크스페이스 전용 키면 ANTHROPIC_WORKSPACE_ID는 비워 둔다
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ steps.op.outputs.ANTHROPIC_API_KEY || secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
           NEWS_EFFORT: ${{ vars.NEWS_EFFORT }}
           NEWS_MAX_SEARCHES: ${{ vars.NEWS_MAX_SEARCHES }}
           NEWS_TOPUP_SEARCHES: ${{ vars.NEWS_TOPUP_SEARCHES }}
           # Gemini (기본 모델이 Gemini이거나, Claude 장애 시 백업)
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          GEMINI_API_KEY: ${{ steps.op.outputs.GEMINI_API_KEY || secrets.GEMINI_API_KEY }}
+          RESEND_API_KEY: ${{ steps.op.outputs.RESEND_API_KEY || secrets.RESEND_API_KEY }}
+          TYPESAFE_API_KEY: ${{ steps.op.outputs.TYPESAFE_API_KEY || secrets.TYPESAFE_API_KEY }}
           READER_PROFILE: ${{ secrets.READER_PROFILE }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}

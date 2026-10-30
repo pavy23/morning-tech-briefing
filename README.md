@@ -68,6 +68,7 @@ In the repository: **Settings → Secrets and variables → Actions → "New rep
 | `FROM_EMAIL` | `Morning Tech Briefing <onboarding@resend.dev>` |
 | `TYPESAFE_API_KEY` | (optional) `ts_...` from [TypeSafe](https://typesafe.ai). Enables the Jev judgments and selection (see 🧪 below) |
 | `READER_PROFILE` | (optional) Reader profile for the relevance score. One line of JSON, e.g. `{"role":"...","strong_interests":["..."],"weak_interests":["..."]}`. It is personal data, so keep it in a Secret. A generic profile is used when absent |
+| `OP_SERVICE_ACCOUNT_TOKEN` | (optional) 1Password service account token. With it, the API key Secrets above can hold 1Password secret references (`op://…`) instead of the keys (see 🔐 below) |
 
 > **Making the repository public does not expose Secrets.** They are not repository files; GitHub stores them
 > encrypted, injects them only into workflow runs and masks them as `***` in logs. A public repository does make
@@ -228,6 +229,7 @@ npm start
 ```
 
 The console prints the candidates, judgments and sent list, and the email goes out. `SKIP_EMAIL=1 npm start` runs everything without sending.
+If `.env` holds 1Password secret references (`op://…`) in place of the API keys, run it through the 1Password CLI: `op run --env-file=.env -- npm start`.
 
 ---
 
@@ -302,6 +304,25 @@ To send from `noreply@yourdomain.com` instead of `onboarding@resend.dev`:
 3. Once verified, change the `FROM_EMAIL` Secret to `Morning Tech Briefing <noreply@yourdomain.com>`
 
 With a verified domain you can send **to any recipient**, and the email lands in spam less often.
+
+---
+
+## 🔐 (optional) Keeping the API keys in 1Password
+
+Instead of putting the API keys in GitHub Secrets, you can keep them in 1Password and have each run read them from there. After that, changing a key means editing the 1Password item only.
+
+1. Create a vault for this briefing in 1Password and put the API key items in it. Service accounts cannot access the built-in vaults (Personal, Private, Employee, the default Shared vault)
+2. On each item's key field, choose **Copy Secret Reference** → this copies a reference of the form `op://vault/item/field`
+3. Create a service account in 1Password with **read** access to that vault only, and register its token as the Secret `OP_SERVICE_ACCOUNT_TOKEN`
+4. **Update** the Secrets `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `RESEND_API_KEY` and `TYPESAFE_API_KEY` one by one, replacing each key with the reference from step 2
+5. Run the workflow manually with `skip_email` checked, as in step 4. It worked if the `Load API keys from 1Password` step shows a `Populating variable: …` line per key and collection finishes
+
+How it works:
+- The workflow uses 1Password's official action ([`1password/load-secrets-action`](https://github.com/1Password/load-secrets-action) v5.0.1, pinned to a commit SHA) to turn the references into the keys and pass them to the next step. The values are masked as `***` in logs
+- Without `OP_SERVICE_ACCOUNT_TOKEN` the step is skipped and the Secret values are used as they are. Values that are not references (existing keys) are also used as they are, so you can move the Secrets over one at a time without missing a send
+- If any reference cannot be read (item deleted, no vault access, …) the run stops at that step. Once fixed, the next scheduled run that day sends
+- Renaming the vault, item or field in 1Password can change the reference; copy it again and update the Secret
+- `TO_EMAIL`, `FROM_EMAIL` and `READER_PROFILE` are not API keys and stay in Secrets
 
 ---
 
@@ -420,6 +441,12 @@ Free-tier limits vary by model and date; check the Google AI Studio pricing page
 **"GEMINI_API_KEY 환경변수가 없습니다" (with a Gemini primary model) / "TO_EMAIL 환경변수가 없습니다"** (environment variable missing)
 - A Secret from step 3 is missing or misspelled. Names are case-sensitive
 
+**"1Password 참조가 실제 키로 바뀌지 않았습니다"** (a 1Password reference was not resolved)
+- A Secret holds an `op://…` reference but the 1Password step was skipped because `OP_SERVICE_ACCOUNT_TOKEN` is missing, or the 1Password item's value is empty. Check the token Secret's name and the item's value
+
+**The `Load API keys from 1Password` step fails**
+- It could not read the key on the `Populating variable: …` line just above. Check that the service account can read that vault, that the vault, item and field were not renamed after you copied the reference, and that the token was not revoked
+
 **"Gemini API 429" (quota / rate limit)**
 - The free tier limits requests per minute (e.g. `limit: 20`). **One automatic send a day never hits it**, but several test runs in a short time can → wait a minute or two and retry
 - If 429s persist after switching to `gemini-3.5-flash`, that key has no free grounded quota for the model → set `MODEL` back to `gemini-2.5-flash`
@@ -468,12 +495,13 @@ Claude Code runs `git`, `gh secret set` and `gh workflow run` in order and compl
 ```
 morning-tech-briefing/
 ├── .github/workflows/
-│   ├── daily.yml                 # four morning crons (the first to start sends), history and cost cache, judgment report artifact
+│   ├── daily.yml                 # four morning crons (the first to start sends), optional 1Password key loading, history and cost cache, judgment report artifact
 │   └── backtest.yml              # replays the last 90 days through the Jev judgments (manual)
 ├── briefing.config.json          # topics, categories, counts, colors (edit this to change topics)
 ├── src/
 │   ├── index.mjs                 # entry point: collect → judge → select → send → record history
 │   ├── config.mjs                # loads and validates briefing.config.json
+│   ├── secrets.mjs               # stops a run whose API keys are still unresolved 1Password references
 │   ├── fetch-news.mjs            # collection (per-model routing, retries, backup switch) + link resolution + hallucinated-batch guard
 │   ├── claude-news.mjs           # Claude + web search collection, checks article addresses against the results
 │   ├── cost.mjs                  # API cost estimate, ledger (.briefing-state/costs.json), monthly run rate

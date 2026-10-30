@@ -14,6 +14,7 @@
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { runShadowJudgments, DUP_THRESHOLD, REPEAT_THRESHOLD } from "../src/judge.mjs";
+import { assertSecretsResolved } from "../src/secrets.mjs";
 
 const IN = process.argv[2] || "backtest/days.json";
 const OUT_DIR = process.argv[3] || "backtest";
@@ -51,6 +52,7 @@ function csvEscape(v) {
 
 async function main() {
   if (!process.env.TYPESAFE_API_KEY) throw new Error("TYPESAFE_API_KEY 환경변수가 없습니다");
+  assertSecretsResolved(["TYPESAFE_API_KEY"]);
   const { days } = JSON.parse(readFileSync(IN, "utf8"));
   if (!Array.isArray(days) || days.length === 0) throw new Error(`${IN}에 days가 없습니다`);
   days.sort((a, b) => (a.date < b.date ? -1 : 1));
