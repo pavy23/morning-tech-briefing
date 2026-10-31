@@ -422,6 +422,11 @@ Gemini 2026년 단가 정리([CloudZero](https://www.cloudzero.com/blog/gemini-p
 - Actions 로그의 `[schedule] 예정 … → 시작 … (지연 N분)`으로 실제 지연을 확인. 첫 예약까지 매일 늦으면 cron을 더 앞당기기
 - 급하면 `workflow_dispatch`로 수동 실행 (수동 실행은 그날 이미 보냈어도 다시 보냄)
 
+**같은 날 메일이 두 번 옴**
+- 예약 실행이 "오늘 이미 보냄" 기록(Actions 캐시)을 내려받지 못한 경우입니다. 2026-10-31에는 캐시 다운로드가 `Egress is over the account limit`로 실패해 10:41에 한 번 더 발송됐습니다
+- 지금은 캐시가 있는데 내려받지 못하면 예약 실행이 `이력 복원 실패` 경고를 남기고 보내지 않으며(다음 예약이 다시 시도), 빈 이력을 저장하지도 않습니다
+- 이미 두 번 나갔다면 그 실행이 이력·비용 기록을 비운 작은 캐시(약 2KB)를 저장한 상태입니다. Actions → Caches에서 그 뒤에 생긴 작은 `briefing-state-…` 캐시를 지우면, 다음 실행이 이전 기록(약 15KB)을 이어 받습니다
+
 **"Anthropic 인증 정보가 없습니다"** / **Claude 401·403**
 - Secrets의 `ANTHROPIC_API_KEY`가 없거나 틀린 키. 이때 `GEMINI_API_KEY`가 있으면 재시도 없이 바로 Gemini로 넘겨 그날 메일은 나갑니다 (로그 `설정 오류 … 백업 모델 gemini-3.6-flash로 전환`, 메일 하단 `수집 모델: Gemini 3.6 Flash`)
 - `This API key is not scoped to a workspace` → 워크스페이스로 범위를 정한 키를 쓰거나, Variables에 `ANTHROPIC_WORKSPACE_ID`(`wrkspc_...`) 등록

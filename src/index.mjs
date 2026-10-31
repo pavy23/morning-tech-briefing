@@ -72,6 +72,15 @@ async function main() {
   const history = await loadHistory();
   const delay = isScheduledRun() ? scheduleDelay(process.env.SCHEDULE_CRON) : null;
   if (delay) console.log(`[schedule] ${delay.text}`);
+  // 이력 캐시가 있는데 내려받지 못하면(워크플로가 STATE_RESTORE_FAILED=1을 넘김) 이력이 비어 보여 같은 날 또 보내게 된다.
+  // 예약 실행은 건너뛰고 다음 예약이 다시 시도한다. 수동 실행은 진행하되, 이 실행의 이력·비용은 저장되지 않는다.
+  if (process.env.STATE_RESTORE_FAILED === "1") {
+    if (isScheduledRun()) {
+      console.log("::warning title=이력 복원 실패::저장된 이력을 내려받지 못해 이번 예약 실행은 보내지 않습니다 (다음 예약 실행이 다시 시도)");
+      return;
+    }
+    console.log("::warning title=이력 복원 실패::저장된 이력 없이 진행합니다 (재탕 판정에 이전 헤드라인이 없고, 이번 실행의 이력·비용은 저장하지 않음)");
+  }
   if (isScheduledRun() && alreadySent(history, today)) {
     console.log(`[schedule] ${today} 브리핑은 이미 발송됨 → 이번 예약 실행은 건너뜁니다`);
     return;
