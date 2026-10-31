@@ -425,6 +425,11 @@ Free-tier limits vary by model and date; check the Google AI Studio pricing page
 - Check the lag in the log line `[schedule] 예정 … → 시작 … (지연 N분)`. If even the first schedule is late every day, move the cron lines earlier
 - If it matters, run it manually with `workflow_dispatch` (a manual run sends even if today's email already went out)
 
+**The same day's email arrives twice**
+- A scheduled run could not download the "already sent today" record (the Actions cache). On 2026-10-31 the cache download failed with `Egress is over the account limit` and a second email went out at 10:41
+- Now, when the cache exists but cannot be downloaded, a scheduled run logs an `이력 복원 실패` (history restore failed) warning and does not send (the next schedule tries again), and it does not save an empty history either
+- If two emails already went out, that run saved a small cache (about 2 KB) with the history and cost records emptied. Delete the small `briefing-state-…` caches created after it under Actions → Caches, and the next run picks up the earlier record (about 15 KB)
+
 **"Anthropic 인증 정보가 없습니다" (no Anthropic credentials) / Claude 401 or 403**
 - `ANTHROPIC_API_KEY` is missing or wrong. With `GEMINI_API_KEY` present, the run switches to Gemini immediately without retrying and the email still goes out (log: `설정 오류 … 백업 모델 gemini-3.6-flash로 전환`; email footer: `수집 모델: Gemini 3.6 Flash`)
 - `This API key is not scoped to a workspace` → use a key scoped to a workspace, or add `ANTHROPIC_WORKSPACE_ID` (`wrkspc_...`) under Variables
