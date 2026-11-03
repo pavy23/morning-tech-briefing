@@ -2,9 +2,9 @@
 
 **English** · [한국어](README.ko.md)
 
-Every morning **before 09:00 KST** this project collects the day's top global news in AI · XR · space · robotics and emails ten of them as an HTML briefing with a card layout.
+Every morning **around 08:00 KST** this project collects the day's top global news in AI · XR · space · robotics and emails ten of them as an HTML briefing with a card layout.
 
-- ⏰ Runs on a **GitHub Actions** cron, so your machine can stay off. Four schedules between 05:23 and 08:23 KST; the first run to start sends and the rest exit
+- ⏰ Runs on a **GitHub Actions** cron, so your machine can stay off. GitHub starts scheduled runs hours late, so there is a schedule every hour from 00:23 to 07:23 KST; the first run to start waits until 07:50 and sends
 - 🤖 **Claude Sonnet 5.5 with web search** collects up to 20 candidate stories, and each article address is checked against the search results (falls back to **Gemini 3.6 Flash** automatically when Claude fails)
 - 🧪 **TypeSafe (Jev) judgments** drop repeats from earlier days, same-day duplicates, generic commentary and off-topic items, then keep 10 (optional, about $0.01 a day)
 - 📧 **Resend** delivers the HTML email (free tier: 3,000 a month)
@@ -83,6 +83,7 @@ In the repository: **Settings → Secrets and variables → Actions → "New rep
 > - `NEWS_TOPUP_SEARCHES` (default 10) — search cap of the top-up request that looks for more stories in categories that came up short; 0 disables it
 > - `COST_ALERT_USD` (default 50) — warn in the email and in Actions when the monthly run rate exceeds this many USD
 > - `ANTHROPIC_WORKSPACE_ID` — only for a personal key that is not scoped to a workspace (`wrkspc_...`)
+> - `SEND_AT` (default `07:50`) — send time (KST, `HH:MM`). Scheduled runs wait until then before sending
 >
 > ⚠️ `gemini-2.5-flash` and `gemini-2.5-flash-lite` are scheduled to shut down on the Gemini API on **2026-10-16** (per Google's deprecation notices; Google names `gemini-3.6-flash` as the replacement for 2.5 Flash). Move `MODEL` to a supported model before then.
 
@@ -93,15 +94,16 @@ In the repository: **Settings → Secrets and variables → Actions → "New rep
 3. Click **"Run workflow"** on the right (check `skip_email` to see the logs without sending)
 4. After a minute or two, check the log and the `TO_EMAIL` inbox
 
-✅ Once the email arrives you are done. It will now be **sent automatically every morning** (by the first of the 05:23, 06:23, 07:23 and 08:23 KST schedules to start).
+✅ Once the email arrives you are done. It will now be **sent automatically every morning around 07:50 KST** (the first of the hourly schedules from midnight to start waits until then and sends).
 
 ---
 
 ## ⚙️ How it works
 
 ```
-Every day at 05:23 · 06:23 · 07:23 · 08:23 KST (20:23–23:23 UTC, off the hour to avoid scheduling delays)
-        │   the first run to start sends; later runs see today's history and exit without API calls
+Every hour from 00:23 to 07:23 KST (15:23–22:23 UTC, off the hour to avoid scheduling delays)
+        │   however late GitHub starts them, the first run to start waits until 07:50 KST (SEND_AT) and sends;
+        │   later runs see today's history and exit without API calls (a run starting over 3 hours early exits)
         ▼
 GitHub Actions trigger (.github/workflows/daily.yml)
         │
@@ -235,9 +237,10 @@ If `.env` holds 1Password secret references (`op://…`) in place of the API key
 
 ## 🔧 Customizing
 
-**Send time** — move the four cron lines in `.github/workflows/daily.yml` together
-- Current: `23 20`, `23 21`, `23 22`, `23 23` (UTC) = 05:23–08:23 KST. The first run to start sends; the rest exit
-- Cron is in UTC (KST − 9 hours), and **on-the-hour schedules lag the most** because GitHub's load peaks there (this repository's 08:00 schedule started 1.8–3.9 hours late, at 09:47–11:51, from 2026-09-01 to 10-08, and the runs for 08-24 to 08-26 never came). Keep the minute off the hour
+**Send time** — set the `SEND_AT` variable (KST, default `07:50`)
+- Scheduled runs wait until this time before sending. A run that starts more than 3 hours (`MAX_WAIT_MIN`) early exits and leaves it to a later schedule; a run that starts after the send time does not wait
+- The cron lines in `.github/workflows/daily.yml` run every hour from `23 15` to `23 22` (UTC) = 00:23–07:23 KST. If you move the send time much earlier, move the cron lines earlier too
+- Cron is in UTC (KST − 9 hours), and **on-the-hour schedules lag the most** because GitHub's load peaks there (this repository's 08:00 schedule started 1.8–3.9 hours late, at 09:47–11:51, from 2026-09-01 to 10-08, and the runs for 08-24 to 08-26 never came). Even at minute 23, the 05:23 schedule started 3.1–3.7 hours late from 2026-10-27 to 11-02 and 6.1 hours late on 11-03. Keep the minute off the hour
 - Check the actual lag in the Actions log (`[schedule] 예정 … → 시작 … (지연 N분)`, planned → started, delay) and in the run summary
 
 **Topics, categories, counts, colors** — edit only `briefing.config.json` in the repository root (see below)
@@ -344,7 +347,7 @@ the avatar empty is recommended (it has no effect on functionality).
 
 | Item | Cost |
 |------|------|
-| GitHub Actions | Free (free for public repos; 2,000 minutes a month for private ones). A sending run takes 2–3 minutes; the remaining schedules on a day already sent exit in seconds |
+| GitHub Actions | Free (free for public repos; 2,000 minutes a month for private ones). A sending run takes 2–3 minutes; the remaining schedules on a day already sent exit in seconds. Waiting until 07:50 (up to 3 hours a day) also counts as run time, so **a private repository can go over 2,000 minutes a month** |
 | Resend | Free (3,000 a month; this uses 30) |
 | Claude API — `claude-sonnet-5-5` (default) | Measured 2026-10-08: **$0.83–0.89 a run** without a top-up = 24–25 web searches ($0.24–0.25) + about $0.6 of tokens (190k–210k cache writes, 300k–410k cache reads, about 8k output); **$1.16** with a category top-up → **about $25–35 a month** |
 | Claude API — `claude-haiku-5-5` (optional) | Same day, same settings: $0.29–0.47 a run → about $9–14 a month |
@@ -421,8 +424,9 @@ Free-tier limits vary by model and date; check the Google AI Studio pricing page
 - Check the Gmail spam folder
 
 **The email arrives late / the workflow does not run on time**
-- GitHub's scheduled runs lag on the hour (this repository's 08:00 schedule started at 09:47–11:51 from 2026-09-01 to 10-08, and 08-24 to 08-26 never ran). That is why there are four schedules between 05:23 and 08:23 KST and the first to start sends
-- Check the lag in the log line `[schedule] 예정 … → 시작 … (지연 N분)`. If even the first schedule is late every day, move the cron lines earlier
+- GitHub starts scheduled runs hours late (the 05:23 schedule started 3.1–3.7 hours late from 2026-10-27 to 11-02 and 6.1 hours late on 11-03; 08-24 to 08-26 never ran). That is why there is a schedule every hour from 00:23 to 07:23 KST, and the first to start waits until 07:50 (`SEND_AT`) and sends
+- If the email arrives after 07:50, every schedule started after that time. Check the lag in the log line `[schedule] 예정 … → 시작 … (지연 N분)`; if it happens often, move the cron lines earlier
+- A manual run started while a scheduled run is waiting for the send time starts after that run finishes. If another scheduled run queues in the meantime, the manual run is cancelled; start it again after 07:50
 - If it matters, run it manually with `workflow_dispatch` (a manual run sends even if today's email already went out)
 
 **The same day's email arrives twice**
@@ -500,7 +504,7 @@ Claude Code runs `git`, `gh secret set` and `gh workflow run` in order and compl
 ```
 morning-tech-briefing/
 ├── .github/workflows/
-│   ├── daily.yml                 # four morning crons (the first to start sends), optional 1Password key loading, history and cost cache, judgment report artifact
+│   ├── daily.yml                 # hourly crons 00:23–07:23 KST, the first to start waits until 07:50 and sends (gate), optional 1Password key loading, history and cost cache, judgment report artifact
 │   └── backtest.yml              # replays the last 90 days through the Jev judgments (manual)
 ├── briefing.config.json          # topics, categories, counts, colors (edit this to change topics)
 ├── src/
