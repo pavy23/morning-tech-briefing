@@ -5,6 +5,7 @@
 import { config, categoryKeys, defaultCategory, normalizeCategory, quotasFor } from "./config.mjs";
 import { isClaudeModel, hasClaudeCredentials, fetchClaudeItems } from "./claude-news.mjs";
 import { recordUsage } from "./cost.mjs";
+import { MAX_AGE_HOURS, dateFromHtml, dateFromUrl, parseLooseDate } from "./article-date.mjs";
 
 const MODEL = process.env.MODEL || "claude-sonnet-5-5";
 // 기본 모델이 거듭 실패할 때 쓸 백업 모델 (같은 모델이면 폴백 비활성).
@@ -33,6 +34,7 @@ Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.
       "source": "출처 언론사명",
       "importance": "high",
       "url": "https://원본기사URL",
+      "published": "원문 기사 게시일 (YYYY-MM-DD)",
       "keywords": "원문 기사를 다시 찾을 핵심 키워드 3~4개"
     }
   ]
@@ -43,6 +45,7 @@ Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.
 - category는 반드시 ${allowed} 중 하나
 - importance는 "high" 또는 "medium"
 - url은 반드시 https://로 시작하는 실제 기사 URL
+- published는 검색으로 확인한 원문 기사의 게시일. 오늘 기준 48시간보다 오래된 기사는 넣지 않음
 - keywords는 원문 기사 제목에 나오는 회사·제품·인물 같은 고유명사 위주 3~4개 단어, 원문 기사의 언어 그대로 (영어 기사면 영어)
 - summary는 150자 이내, 한국어로 작성
 - 순수 JSON만 출력`;
@@ -103,6 +106,7 @@ Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.
 헤드라인: 한국어 헤드라인 (60자 이내)
 요약: 핵심 내용 요약 (100~150자 한국어). 검색으로 확인한 사실만 쓰고, 기사에 있는 구체적 수치·고유명사를 포함하세요.
 출처: 출처 언론사명
+게시일: 원문 기사의 게시일 (YYYY-MM-DD)
 검색어: 원문 기사를 다시 찾을 수 있는 키워드 3~4개. 원문 기사 제목에 나오는 회사·제품·인물 같은 고유명사 위주로, 원문 기사의 언어 그대로 씁니다 (영어 기사면 영어).
 중요도: high
 
@@ -110,7 +114,8 @@ Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.
 - 총 ${want}개: ${quota} 권장
 - 카테고리는 반드시 ${allowed} 중 하나
 - 중요도는 high 또는 medium
-- 각 항목은 "### 번호"로 시작하고, 위 여섯 줄만 씁니다. 머리말·맺음말·표는 쓰지 않습니다.
+- 게시일은 검색으로 확인한 원문 기사의 날짜를 씁니다. 오늘 기준 48시간보다 오래된 기사는 넣지 않습니다.
+- 각 항목은 "### 번호"로 시작하고, 위 일곱 줄만 씁니다. 머리말·맺음말·표는 쓰지 않습니다.
 - 서로 다른 뉴스여야 하며, 같은 사건을 두 번 넣지 않습니다.`;
 }
 
@@ -141,6 +146,7 @@ function parseNewsList(raw) {
       headline,
       summary: field("요약"),
       source: field("출처"),
+      published: field("게시일"),
       keywords: field("검색어"),
       importance: /medium/i.test(field("중요도")) ? "medium" : "high",
       url,
@@ -366,11 +372,69 @@ async function resolveAllLinks(items, chunkUris) {
       }
     })
   );
+  return linkStats(items);
+}
+
+function linkStats(items) {
   const count = (s) => items.filter((it) => it.linkStatus === s).length;
   const grounded = count("grounded");
   const direct = count("direct");
   const fallback = count("fallback");
   return { grounded, direct, fallback, real: grounded + direct, total: items.length };
+}
+
+// 응답 본문을 앞에서 limit 바이트까지만 읽는다 (게시일 메타데이터는 <head>에 있다)
+async function readHead(res, limit = 600_000) {
+  const reader = res.body?.getReader?.();
+  if (!reader) return (await res.text()).slice(0, limit);
+  const chunks = [];
+  let size = 0;
+  while (size < limit) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    size += value.length;
+  }
+  reader.cancel().catch(() => {});
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// 기사 페이지에서 게시일 메타데이터를 읽는다. 봇 차단·시간 초과·메타데이터 없음이면 null.
+async function fetchPublishedAt(url) {
+  try {
+    const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(8000), headers: { "User-Agent": UA } });
+    return r.ok ? dateFromHtml(await readHead(r)) : null;
+  } catch {
+    return null;
+  }
+}
+
+export const DATE_SOURCE_LABEL = { page: "페이지", url: "주소", model: "모델" };
+
+// Gemini 그라운딩에는 게시 시점이 없어 오래된 기사가 섞인다(2026-11-03: 2024년 기사 여러 건).
+// 기사 페이지 메타데이터 → 주소 속 날짜 → 모델이 적은 게시일 순으로 게시일을 정하고,
+// MAX_AGE_HOURS보다 오래된 항목을 items에서 뺀다. 날짜를 알 수 없는 항목은 남긴다
+// (봇을 막는 언론사가 많아 이것까지 빼면 멀쩡한 기사가 줄어든다).
+// 반환: { sources: 근거별 개수, dropped: 뺀 항목 }. 각 항목에 publishedAt·publishedFrom을 남긴다.
+export async function dropStaleItems(items, now = Date.now(), readPage = fetchPublishedAt) {
+  const sources = { page: 0, url: 0, model: 0, unknown: 0 };
+  await Promise.all(items.map(async (it) => {
+    const real = it.linkStatus === "grounded" || it.linkStatus === "direct";
+    const found = [
+      ["page", real ? await readPage(it.url) : null],
+      ["url", real ? dateFromUrl(it.url) : null],
+      ["model", parseLooseDate(it.published)],
+    ].find(([, t]) => t != null);
+    it.publishedAt = found ? found[1] : null;
+    it.publishedFrom = found ? found[0] : "unknown";
+    sources[it.publishedFrom]++;
+  }));
+  const dropped = [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const t = items[i].publishedAt;
+    if (t != null && (now - t) / 3600000 > MAX_AGE_HOURS) dropped.unshift(...items.splice(i, 1));
+  }
+  return { sources, dropped };
 }
 
 // 이 개수 미만이면 응답이 잘린 것(MAX_TOKENS)으로 보고 재시도 (목표 개수의 절반)
@@ -579,6 +643,19 @@ export async function fetchNews({ want = config.total } = {}) {
       const r = await fetchRawItems(model, askFor);
       // 링크를 실제 기사 URL로 변환·검증 (만료/404/톱페이지 방지) + 품질 집계
       r.stats = await resolveAllLinks(r.items, r.chunkUris);
+      // Gemini는 게시일을 따로 확인해 오래된 기사를 빼고 다시 집계한다. 많이 빠지면 아래 기준에 걸려 재수집된다.
+      if (!isClaudeModel(model)) {
+        const { sources, dropped } = await dropStaleItems(r.items);
+        r.stats = linkStats(r.items);
+        console.log(
+          `[date] 게시일 확인: 페이지 ${sources.page} · 주소 ${sources.url} · 모델 ${sources.model} · 모름 ${sources.unknown}` +
+          ` → ${MAX_AGE_HOURS}시간 넘은 기사 ${dropped.length}건 제외`
+        );
+        for (const it of dropped) {
+          const day = new Date(it.publishedAt).toISOString().slice(0, 10);
+          console.log(`  - 제외: ${day} (${DATE_SOURCE_LABEL[it.publishedFrom]}) ${it.headline}`);
+        }
+      }
       r.model = model;
       r.minGrounded = minGrounded;
       console.log(
