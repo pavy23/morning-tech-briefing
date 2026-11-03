@@ -153,6 +153,7 @@ went out as a normal email). Every URL in such a batch is fabricated, so almost 
 - If the primary model returns **zero search sources** (grounding chunks for Gemini, search results for Claude), web search did not run, and the attempt is retried regardless of the link count (on 2026-09-25 three fabricated URLs happened to be live and slipped past the count alone)
 - Across up to 6 attempts the result with the **most real links** wins (if all fail, it still sends, on the grounds that a weak briefing beats a missing one)
 - Each attempt logs `items / search sources / real links / search fallbacks`, and each item is tagged `⚠️검색폴백` when it fell back, so the threshold can be tuned from a few days of logs
+- **Publication dates (Gemini)**: Gemini grounding carries no publication time, and two-year-old stories once got in (the 2026-11-03 check run: the ChatGPT Search launch, Claude 3.5 Sonnet computer use and other 2024 stories). Items collected with Gemini therefore get a date from the article page's publication metadata, then the date in the address (`/2024/10/31/`), then the date the model wrote, and **items older than 72 hours are dropped**. Items with no date at all are kept. The log line `[date] 게시일 확인: 페이지 · 주소 · 모델 · 모름 → N건 제외` (dates found from page / address / model / unknown → N dropped) and the list under it show what happened; if many are dropped, the checks above trigger a retry. Claude chooses from search results that carry the publication time, so it skips this step
 
 Tune it with the `MIN_GROUNDED_LINKS` repository variable as an absolute count (0 disables the guard; an empty
 value means "use the default"). Check how many links normally survive and set the threshold below half of that.
@@ -512,6 +513,7 @@ morning-tech-briefing/
 │   ├── config.mjs                # loads and validates briefing.config.json
 │   ├── secrets.mjs               # stops a run whose API keys are still unresolved 1Password references
 │   ├── fetch-news.mjs            # collection (per-model routing, retries, backup switch) + link resolution + hallucinated-batch guard
+│   ├── article-date.mjs          # reads an article's publication date from page metadata or its address (drops stale Gemini items)
 │   ├── claude-news.mjs           # Claude + web search collection, checks article addresses against the results
 │   ├── cost.mjs                  # API cost estimate, ledger (.briefing-state/costs.json), monthly run rate
 │   ├── schedule.mjs              # skips duplicate scheduled sends, computes the schedule lag
