@@ -40,6 +40,31 @@ const KNOWN_CASES = [
   { kind: "dup", date: "2026-09-15", a: "감속론", b: "자율실험실", note: "LG AI 연구원 두 건 (다른 사건일 수 있음)" },
 ];
 
+// d번째 날 직전 KEEP_DAYS일 동안 발송된 헤드라인 (운영의 이력 창과 같다)
+function previousHeadlines(days, d) {
+  const cutoff = new Date(days[d].date); cutoff.setDate(cutoff.getDate() - KEEP_DAYS);
+  return days
+    .slice(0, d)
+    .filter((p) => new Date(p.date) > cutoff)
+    .flatMap((p) => p.items.map((it) => ({ date: p.date, headline: it.headline })));
+}
+
+// 문자 바이그램 Dice 유사도 (한글·영문·숫자). 재탕 후보와 가장 닮은 이전 헤드라인을 사람이 확인하도록 붙이는 참고값
+function bigramSet(s) {
+  const set = new Set();
+  for (const w of String(s).toLowerCase().replace(/[^0-9a-z가-힣]+/g, " ").split(" ")) {
+    if (w.length === 1) set.add(w);
+    for (let i = 0; i < w.length - 1; i++) set.add(w.slice(i, i + 2));
+  }
+  return set;
+}
+function similarity(a, b) {
+  const A = bigramSet(a), B = bigramSet(b);
+  let n = 0;
+  for (const x of A) if (B.has(x)) n++;
+  return A.size + B.size ? (2 * n) / (A.size + B.size) : 0;
+}
+
 function seededRandom(seed) {
   let s = seed >>> 0;
   return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 2 ** 32; };
@@ -64,11 +89,7 @@ async function main() {
 
   for (let d = 0; d < days.length; d++) {
     const day = days[d];
-    const cutoff = new Date(day.date); cutoff.setDate(cutoff.getDate() - KEEP_DAYS);
-    const previous = days
-      .slice(0, d)
-      .filter((p) => new Date(p.date) > cutoff)
-      .flatMap((p) => p.items.map((it) => ({ date: p.date, headline: it.headline })));
+    const previous = previousHeadlines(days, d);
     const items = day.items.map((it) => ({ category: it.category, headline: it.headline }));
     try {
       const rep = await runShadowJudgments(items, previous);
@@ -88,7 +109,11 @@ async function main() {
 
   // ── 집계 ──
   const ok = results.filter((r) => r.report);
-  const allItems = ok.flatMap((r) => r.report.items.map((j) => ({ date: r.date, ...j })));
+  const dayByDate = new Map(days.map((d) => [d.date, d]));
+  const allItems = ok.flatMap((r) => r.report.items.map((j) => ({
+    date: r.date, ...j,
+    prod_repeat: dayByDate.get(r.date)?.items[j.index]?.prod_repeat ?? null, // 운영 섀도 판정의 재탕 확률
+  })));
   const repeatsFlagged = allItems.filter((j) => j.repeat?.flagged);
   const withHistory = allItems.filter((j) => j.repeat);
   const dupPairs = ok.flatMap((r) => r.report.duplicates.map((p) => ({
@@ -168,6 +193,33 @@ async function main() {
   bins.forEach((n, i) => L.push(`| ${(i / 10).toFixed(1)}~${((i + 1) / 10).toFixed(1)} | ${n} |`));
   const gray = withHistory.filter((j) => j.repeat.prob >= 0.3 && j.repeat.prob < 0.7).length;
   L.push("", `회색지대(0.3~0.7): ${gray}건 (${(100 * gray / Math.max(1, withHistory.length)).toFixed(1)}%)`);
+
+  // 재탕 기준을 낮추면 무엇이 더 빠지는지. 운영 확률(그날 섀도 판정, 요약까지 본 값)과 백테스트 확률(헤드라인만) 둘 다로 센다.
+  // 운영 0.5 이상(운영 확률이 없는 날은 백테스트 0.6 이상) 항목에는 가장 닮은 이전 헤드라인 3개를 붙여 재탕 여부를 사람이 가린다.
+  const withProd = allItems.filter((j) => j.prod_repeat != null);
+  L.push("", `## 재탕 기준 민감도`, "");
+  L.push(`운영 = 그날 실제 실행의 섀도 판정(발송된 항목), 백테스트 = 헤드라인만으로 다시 판정한 값.`, "");
+  L.push(`| 기준 | 운영 확률로 걸리는 건수 (${withProd.length}건 중) | 백테스트 확률로 걸리는 건수 (${withHistory.length}건 중) |`, `|---|---|---|`);
+  for (const t of [0.7, 0.65, 0.6, 0.55, 0.5]) {
+    const p = withProd.filter((j) => j.prod_repeat >= t).length;
+    const b = withHistory.filter((j) => j.repeat.prob >= t).length;
+    L.push(`| ${t.toFixed(2)} 이상 | ${p} | ${b} |`);
+  }
+  const fmtP = (v) => (v == null ? "-" : v.toFixed(2));
+  const dayIndex = new Map(days.map((d, i) => [d.date, i]));
+  const near = allItems
+    .filter((j) => (j.prod_repeat ?? -1) >= 0.5 || (j.prod_repeat == null && (j.repeat?.prob ?? 0) >= 0.6))
+    .sort((a, b) => (b.prod_repeat ?? -1) - (a.prod_repeat ?? -1) || (b.repeat?.prob ?? 0) - (a.repeat?.prob ?? 0));
+  L.push("", `### 재탕 확률이 높은 발송 항목 ${near.length}건과 가장 닮은 이전 헤드라인 3개 (유사도 날짜 헤드라인)`, "");
+  for (const j of near) {
+    L.push(`- ${j.date} 운영 ${fmtP(j.prod_repeat)} / 백테스트 ${fmtP(j.repeat?.prob)} [${j.category}] ${j.headline}`);
+    const top = previousHeadlines(days, dayIndex.get(j.date))
+      .map((p) => ({ ...p, sim: similarity(j.headline, p.headline) }))
+      .sort((a, b) => b.sim - a.sim)
+      .slice(0, 3);
+    for (const p of top) L.push(`  - ${p.sim.toFixed(2)} ${p.date.slice(5)} ${p.headline}`);
+  }
+  if (!near.length) L.push("(없음)");
 
   L.push("", `## 카테고리별 관련도 평균`, "");
   L.push(`| 카테고리 | 건수 | 평균 점수 | 평균 confidence |`, `|---|---|---|---|`);
