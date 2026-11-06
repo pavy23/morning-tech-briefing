@@ -19,7 +19,8 @@ export function scheduleDelay(cron, now = new Date()) {
   if (!m) return null;
   const planned = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), Number(m[2]), Number(m[1])));
   if (planned > now) planned.setUTCDate(planned.getUTCDate() - 1);
-  const kst = (d) => d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Seoul" });
+  // hour12: false는 Node 20에서 ko-KR 자정을 "24:23"으로 찍었다(2026-11-04). hourCycle로 00~23시를 못 박는다
+  const kst = (d) => d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "Asia/Seoul" });
   const minutes = Math.round((now - planned) / 60000);
   return { planned, minutes, text: `예정 ${kst(planned)} KST → 시작 ${kst(now)} KST (지연 ${minutes}분)` };
 }
