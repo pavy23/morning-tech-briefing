@@ -90,12 +90,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
 
       - name: Install dependencies
@@ -107,7 +107,7 @@ jobs:
       # account limit"로 같은 날 두 번 발송). 그래서 먼저 내려받지 않고 있는지만 확인해 두고, 둘을 비교해 실패를 가려낸다.
       - name: Look up briefing history
         id: state-lookup
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .briefing-state
           key: briefing-state-${{ github.run_id }}
@@ -117,7 +117,7 @@ jobs:
 
       - name: Restore briefing history
         id: state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .briefing-state
           key: briefing-state-${{ github.run_id }}
@@ -178,14 +178,14 @@ jobs:
       # 이력을 내려받지 못한 실행은 저장하지 않는다. 빈 이력이 "가장 최근 캐시"가 되면 다음 실행들이 그걸 이어 받는다.
       - name: Save briefing history
         if: always() && (steps.state.outputs.cache-matched-key != '' || steps.state-lookup.outputs.cache-matched-key == '')
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .briefing-state
           key: briefing-state-${{ github.run_id }}
 
       - name: Upload shadow report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: shadow-report-${{ github.run_id }}
           path: out/
