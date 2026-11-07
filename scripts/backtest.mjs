@@ -191,8 +191,8 @@ async function main() {
   for (const j of withHistory) bins[Math.min(9, Math.floor(j.repeat.prob * 10))]++;
   L.push(`| 구간 | 건수 |`, `|---|---|`);
   bins.forEach((n, i) => L.push(`| ${(i / 10).toFixed(1)}~${((i + 1) / 10).toFixed(1)} | ${n} |`));
-  const gray = withHistory.filter((j) => j.repeat.prob >= 0.3 && j.repeat.prob < 0.7).length;
-  L.push("", `회색지대(0.3~0.7): ${gray}건 (${(100 * gray / Math.max(1, withHistory.length)).toFixed(1)}%)`);
+  const gray = withHistory.filter((j) => j.repeat.prob >= 0.3 && j.repeat.prob < REPEAT_THRESHOLD).length;
+  L.push("", `회색지대(0.3~${REPEAT_THRESHOLD}): ${gray}건 (${(100 * gray / Math.max(1, withHistory.length)).toFixed(1)}%)`);
 
   // 재탕 기준을 낮추면 무엇이 더 빠지는지. 운영 확률(그날 섀도 판정, 요약까지 본 값)과 백테스트 확률(헤드라인만) 둘 다로 센다.
   // 운영 0.5 이상(운영 확률이 없는 날은 백테스트 0.6 이상) 항목에는 가장 닮은 이전 헤드라인 3개를 붙여 재탕 여부를 사람이 가린다.
