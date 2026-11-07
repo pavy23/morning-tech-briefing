@@ -4,12 +4,13 @@
 // (백테스트로 재탕·중복은 검증됐고, 관련도는 독자 채점 뒤에 켠다).
 
 import { config, quotasFor } from "./config.mjs";
+import { REPEAT_THRESHOLD, DUP_THRESHOLD } from "./judge.mjs";
 
 // items: 후보 배열 (report.items와 같은 인덱스), report: runShadowJudgments 결과
 export function selectItems(items, report, {
   total = config.total,
-  repeatThreshold = report?.thresholds?.repeat ?? 0.7,
-  dupThreshold = report?.thresholds?.duplicate ?? 0.7,
+  repeatThreshold = report?.thresholds?.repeat ?? REPEAT_THRESHOLD,
+  dupThreshold = report?.thresholds?.duplicate ?? DUP_THRESHOLD,
 } = {}) {
   const n = items.length;
   const removed = []; // { index, reason: "offtopic" | "generic" | "repeat" | "duplicate", prob, of? }

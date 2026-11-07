@@ -162,6 +162,8 @@ jobs:
           DEBUG_GEMINI_RESPONSE: ${{ inputs.debug == true && '1' || '' }}
           # Jev 선별 모드 (기본 켜짐). Variables에 JEV_SELECT=shadow 를 두면 기록만 하고 메일은 그대로
           JEV_SELECT: ${{ vars.JEV_SELECT }}
+          # 재탕 제거 기준 확률 (비우면 0.6, src/judge.mjs)
+          REPEAT_THRESHOLD: ${{ vars.REPEAT_THRESHOLD }}
           SKIP_EMAIL: ${{ inputs.skip_email == true && '1' || '' }}
           # 월 환산 API 비용이 이 금액(USD)을 넘으면 메일·로그에 경고 (기본 50)
           COST_ALERT_USD: ${{ vars.COST_ALERT_USD }}

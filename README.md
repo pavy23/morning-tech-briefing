@@ -84,6 +84,7 @@ In the repository: **Settings → Secrets and variables → Actions → "New rep
 > - `COST_ALERT_USD` (default 50) — warn in the email and in Actions when the monthly run rate exceeds this many USD
 > - `ANTHROPIC_WORKSPACE_ID` — only for a personal key that is not scoped to a workspace (`wrkspc_...`)
 > - `SEND_AT` (default `07:50`) — send time (KST, `HH:MM`). Scheduled runs wait until then before sending
+> - `REPEAT_THRESHOLD` (default 0.6) — repeat cut. A candidate is dropped when Jev's probability that an earlier briefing already covered the event is at or above this. Lower it if repeats slip through, raise it if new stories get dropped
 >
 > ⚠️ `gemini-2.5-flash` and `gemini-2.5-flash-lite` are scheduled to shut down on the Gemini API on **2026-10-16** (per Google's deprecation notices; Google names `gemini-3.6-flash` as the replacement for 2.5 Flash). Move `MODEL` to a supported model before then.
 
@@ -165,7 +166,7 @@ Jev does not generate text; it returns typed judgments only (a yes/no probabilit
 
 | Judgment | How | Used today |
 |---|---|---|
-| Repeat of an earlier briefing | "Was this event already covered?" against the last 14 days of sent headlines (Noul) | **Applied**: removed at probability ≥ 0.7 |
+| Repeat of an earlier briefing | "Was this event already covered?" against the last 14 days of sent headlines (Noul) | **Applied**: removed at probability ≥ 0.6 (`REPEAT_THRESHOLD`) |
 | Same-day duplicate | "Do these two report the same event?" per candidate pair (Noul) | **Applied**: the later one removed at ≥ 0.7 |
 | Generic commentary | "Does it report a concrete event (announcement, deal, launch, incident, report)?" (Noul) | **Applied**: removed at concreteness ≤ 0.3 |
 | Off-topic | A "none" option in the category choice; its probability is the signal (Choice) | **Applied**: removed at "none" ≥ 0.7 |
@@ -185,8 +186,10 @@ Evidence (87-day backtest, 2026-06-22 to 09-19, 852 items):
 | Generic | 14.3% | Mostly market-size forecasts, trend explainers and columns |
 | Off-topic | 0.4% | A memory-chip roadmap, an M&A forecast, an agriculture column |
 
-Repeat probabilities are polarized (75% below 0.2, 8% above 0.8), so 0.7 is a stable threshold and the 0.3–0.7
-gray zone (9%) is kept. Concreteness is split the same way (14% at or below 0.3, 64% at or above 0.7), so 0.3 removes
+Repeat probabilities are polarized (75% below 0.2, 8% above 0.8). The cut started at 0.7; the 2026-11-07 backtest of the
+475 sent items with a production judgment found 15 of the 16 items between 0.6 and 0.7 to be real repeats (a lead story
+running again the next day, for example), while half of the 12 between 0.5 and 0.6 were new developments such as
+"launch imminent" followed by the launch, so the cut is now 0.6. The 0.3–0.6 gray zone is kept. Concreteness is split the same way (14% at or below 0.3, 64% at or above 0.7), so 0.3 removes
 only clear commentary. Repeats plus generic items can remove about a quarter of the candidates, which is why 20 are collected.
 
 Conditions and outputs:
@@ -199,8 +202,8 @@ Conditions and outputs:
   `out/judge-YYYY-MM-DD.json` (judgments plus selection rationale) is uploaded as the `shadow-report-*` artifact for 90 days
 - Sent headlines are kept in `.briefing-state/history.json` and carried between runs through the Actions cache
   (never committed). Removed candidates are not recorded
-- Thresholds: `DUP_THRESHOLD`, `REPEAT_THRESHOLD` (default 0.7), `GENERIC_THRESHOLD` (default 0.3, at or below is generic),
-  `OFFTOPIC_THRESHOLD` (default 0.7, at or above is off-topic)
+- Thresholds: `DUP_THRESHOLD` (default 0.7), `REPEAT_THRESHOLD` (default 0.6, a repository variable), `GENERIC_THRESHOLD` (default 0.3, at or below is generic),
+  `OFFTOPIC_THRESHOLD` (default 0.7, at or above is off-topic). A value that is not a number from 0 to 1 logs an Actions warning and the default is used
 
 **Testing**: Actions tab → Run workflow → check `skip_email` → collection, judgments and selection are logged without sending.
 History is not updated in this mode.
@@ -209,9 +212,12 @@ History is not updated in this mode.
 briefings. Actions tab → "Jev Backtest (past briefings)" → Run workflow.
 `scripts/extract-history.mjs` pulls the per-day headlines from the Actions logs (retained 90 days) and
 `scripts/backtest.mjs` replays them in date order with a rolling 14-day history, then uploads the `jev-backtest-*` artifact with
-`summary.md` (repeat, duplicate, generic and off-topic lists, a check against hand-verified cases, top-3 relevance per day, probability histograms),
+`summary.md` (repeat, duplicate, generic and off-topic lists, a check against hand-verified cases, top-3 relevance per day, probability histograms, repeat-threshold sensitivity),
 `grading.csv` (a sheet for manual scoring) and `results.json`. The full summary is also printed in the run log. No email is sent, Gemini is not
 called, and the Jev cost is about $0.3 for 90 days. The logs contain only headlines and categories, so treat the results as a lower bound.
+To change the repeat cut, read "재탕 기준 민감도" (repeat-threshold sensitivity) in `summary.md`. It counts how many more sent items
+each cut would remove, by the production probability (what that day's run judged with the summaries) and by the backtest probability,
+and lists every item at 0.5 or above with its three most similar earlier headlines so you can tell real repeats from new stories.
 
 **Next steps**: grade the relevance judgments with `grading.csv` from the backtest artifact; if agreement is high enough, enable relevance ordering.
 Then validate a "same debate" judgment (capping variations on one topic that are not the same event) with a backtest before adding it.

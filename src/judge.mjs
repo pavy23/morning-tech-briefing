@@ -21,11 +21,24 @@ export function isJudgeEnabled() {
   return Boolean(process.env.TYPESAFE_API_KEY);
 }
 
+// 환경변수의 기준 확률. 비어 있으면 기본값, 0~1 숫자가 아니면 경고를 남기고 기본값
+// (오타가 NaN이 되면 비교가 늘 거짓이라 그 판정이 조용히 꺼진다)
+function thresholdFromEnv(name, fallback) {
+  const raw = String(process.env[name] ?? "").trim();
+  if (!raw) return fallback;
+  const v = Number(raw);
+  if (Number.isFinite(v) && v >= 0 && v <= 1) return v;
+  console.log(`::warning title=${name} 값 오류::'${raw}'을 0~1 사이 숫자로 읽지 못해 기본값 ${fallback}을 씁니다`);
+  return fallback;
+}
+
 // 제거·표시 기준 확률 (판정 자체는 확률 그대로 저장)
-export const DUP_THRESHOLD = Number(process.env.DUP_THRESHOLD || 0.7);      // 같은 사건 쌍
-export const REPEAT_THRESHOLD = Number(process.env.REPEAT_THRESHOLD || 0.7); // 이전 브리핑 재탕
-export const GENERIC_THRESHOLD = Number(process.env.GENERIC_THRESHOLD || 0.3); // "구체적 사건" 확률이 이 값 이하면 일반론
-export const OFFTOPIC_THRESHOLD = Number(process.env.OFFTOPIC_THRESHOLD || 0.7); // "해당 없음" 확률이 이 값 이상이면 주제 이탈
+export const DUP_THRESHOLD = thresholdFromEnv("DUP_THRESHOLD", 0.7);       // 같은 사건 쌍
+// 이전 브리핑 재탕. 2026-11-07 백테스트(운영 판정이 남은 발송 475건)에서 0.6~0.7은 16건 중 15건이 실제 재탕,
+// 0.5~0.6은 12건 중 절반이 "예정→실제" 같은 새 전개라 0.7에서 0.6으로 낮췄다. Variables의 REPEAT_THRESHOLD로 조정
+export const REPEAT_THRESHOLD = thresholdFromEnv("REPEAT_THRESHOLD", 0.6);
+export const GENERIC_THRESHOLD = thresholdFromEnv("GENERIC_THRESHOLD", 0.3); // "구체적 사건" 확률이 이 값 이하면 일반론
+export const OFFTOPIC_THRESHOLD = thresholdFromEnv("OFFTOPIC_THRESHOLD", 0.7); // "해당 없음" 확률이 이 값 이상이면 주제 이탈
 
 // 카테고리 재분류 선택지: briefing.config.json의 key와 description을 그대로 쓴다.
 // description이 없으면 라벨만으로 판정한다(null = 설명 없는 선택지).

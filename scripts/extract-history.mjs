@@ -2,7 +2,8 @@
 // 과거 GitHub Actions 실행 로그(보관 90일)에서 실제 발송된 브리핑 헤드라인을 추출해
 // backtest/days.json 으로 저장한다. Actions 러너에 기본 설치된 gh CLI를 사용한다.
 //
-// 출력 형식: { days: [ { date: "2026-09-19", run_id, items: [ { category, headline } ] } ] }
+// 출력 형식: { days: [ { date: "2026-09-19", run_id, items: [ { category, headline, prod_repeat } ] } ] }
+// prod_repeat: 그 실행의 섀도 판정이 매긴 재탕 확률 (섀도 판정 이전 로그나 이력이 없던 날은 null)
 // 같은 날짜에 발송이 여러 번이면(수동 테스트) 가장 늦은 실행을 채택한다.
 
 import { execFileSync } from "node:child_process";
@@ -25,6 +26,14 @@ export function parseRunLog(text, createdAt) {
   if (m) date = `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
   else if (createdAt) date = new Date(createdAt).toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
 
+  // 운영 섀도 판정 줄의 재탕 확률 (요약까지 보고 판정한 값):
+  // "01. 관련도 1.25 (conf 0.72) [AI] 사건 0.92 이탈 0.01 재탕 0.08 | 헤드라인"
+  const prodRepeat = new Map();
+  for (const line of text.split("\n")) {
+    const s = line.match(/(?:^|\s)\d{2}\. 관련도 [\d.]+ \(conf [\d.]+\) \[[^\]]+\] .*?재탕 ([\d.]+)(?:⚠️)? \| (.+?)\s*$/);
+    if (s) prodRepeat.set(s[2], Number(s[1]));
+  }
+
   const items = [];
   const seen = new Set();
   for (const line of text.split("\n")) {
@@ -35,7 +44,7 @@ export function parseRunLog(text, createdAt) {
     if (seen.has(idx)) continue; // 섀도 블록 등 뒤에 오는 동일 번호는 무시
     seen.add(idx);
     const headline = mm[3].replace(/ \(직접URL\)$/, "").replace(/ ⚠️검색폴백$/, "").trim();
-    items.push({ category: mm[2].trim(), headline });
+    items.push({ category: mm[2].trim(), headline, prod_repeat: prodRepeat.get(headline) ?? null });
   }
   return { date, sent, items };
 }

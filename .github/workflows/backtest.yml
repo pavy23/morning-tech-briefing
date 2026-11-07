@@ -57,6 +57,8 @@ jobs:
           TYPESAFE_API_KEY: ${{ steps.op.outputs.TYPESAFE_API_KEY || secrets.TYPESAFE_API_KEY }}
           READER_PROFILE: ${{ secrets.READER_PROFILE }}
           BACKTEST_SAMPLE: ${{ inputs.sample }}
+          # 운영(daily.yml)과 같은 재탕 기준으로 표시한다 (비우면 0.6)
+          REPEAT_THRESHOLD: ${{ vars.REPEAT_THRESHOLD }}
         run: node scripts/backtest.mjs backtest/days.json backtest
 
       - name: Upload backtest results
