@@ -6,6 +6,7 @@ import { config, categoryKeys, defaultCategory, normalizeCategory, quotasFor } f
 import { isClaudeModel, hasClaudeCredentials, fetchClaudeItems } from "./claude-news.mjs";
 import { recordUsage } from "./cost.mjs";
 import { MAX_AGE_HOURS, dateFromHtml, dateFromUrl, parseLooseDate } from "./article-date.mjs";
+import { recentBlock, recentRule } from "./history.mjs";
 
 const MODEL = process.env.MODEL || "claude-sonnet-5-5";
 // 기본 모델이 거듭 실패할 때 쓸 백업 모델 (같은 모델이면 폴백 비활성).
@@ -16,13 +17,13 @@ const FALLBACK_MODEL = process.env.FALLBACK_MODEL ||
 
 // 프롬프트는 설정 파일의 주제·카테고리·개수 배분으로 조립한다 (주제 변경 시 코드 수정 불필요).
 // want: 요청할 건수. Jev 선별이 켜지면 목표(total)보다 많이 받아 재탕·중복을 뺀 자리를 채운다.
-export function buildPrompt(cfg = config, want = cfg.total) {
+export function buildPrompt(cfg = config, want = cfg.total, recent = []) {
   const quota = quotasFor(want, cfg).map((q) => `${q.key} ${q.count}개`).join(", ");
   const allowed = cfg.categories.map((c) => `"${c.key}"`).join(", ");
   return `당신은 글로벌 테크 뉴스 에디터입니다.
 Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.searchScope} 가장 중요한 글로벌 주요 뉴스를 찾아 아래 JSON 형식으로만 응답하세요.
 
-반드시 아래 JSON 구조로, 코드블록이나 다른 텍스트 없이 순수 JSON만 출력하세요:
+${recentBlock(recent)}반드시 아래 JSON 구조로, 코드블록이나 다른 텍스트 없이 순수 JSON만 출력하세요:
 
 {
   "items": [
@@ -47,7 +48,7 @@ Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.
 - url은 반드시 https://로 시작하는 실제 기사 URL
 - published는 검색으로 확인한 원문 기사의 게시일. 오늘 기준 48시간보다 오래된 기사는 넣지 않음
 - keywords는 원문 기사 제목에 나오는 회사·제품·인물 같은 고유명사 위주 3~4개 단어, 원문 기사의 언어 그대로 (영어 기사면 영어)
-- summary는 150자 이내, 한국어로 작성
+- summary는 150자 이내, 한국어로 작성${recentRule(recent)}
 - 순수 JSON만 출력`;
 }
 
@@ -95,13 +96,13 @@ function parseNewsJSON(raw) {
 // 이 저장소 실측 2026-09-25: gemini-3.6-flash 6회 모두 chunk 0개).
 // 그래서 3.x에는 산문에 가까운 번호 목록으로 받고, 출처 URL은 모델이 쓰게 하지 않고
 // groundingSupports(문장 ↔ 출처 chunk 매핑)에서 코드로 붙인다.
-export function buildListPrompt(cfg = config, want = cfg.total) {
+export function buildListPrompt(cfg = config, want = cfg.total, recent = []) {
   const quota = quotasFor(want, cfg).map((q) => `${q.key} ${q.count}개`).join(", ");
   const allowed = cfg.categories.map((c) => c.key).join(", ");
   return `당신은 글로벌 테크 뉴스 에디터입니다.
 Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.searchScope} 가장 중요한 글로벌 주요 뉴스 ${want}건을 찾아, 각 뉴스를 아래 형식의 항목으로 정리하세요.
 
-### 1
+${recentBlock(recent)}### 1
 카테고리: ${cfg.categories[0].key}
 헤드라인: 한국어 헤드라인 (60자 이내)
 요약: 핵심 내용 요약 (100~150자 한국어). 검색으로 확인한 사실만 쓰고, 기사에 있는 구체적 수치·고유명사를 포함하세요.
@@ -116,7 +117,7 @@ Google 검색을 사용해 오늘 날짜 기준 최근 24시간 이내의 ${cfg.
 - 중요도는 high 또는 medium
 - 게시일은 검색으로 확인한 원문 기사의 날짜를 씁니다. 오늘 기준 48시간보다 오래된 기사는 넣지 않습니다.
 - 각 항목은 "### 번호"로 시작하고, 위 일곱 줄만 씁니다. 머리말·맺음말·표는 쓰지 않습니다.
-- 서로 다른 뉴스여야 하며, 같은 사건을 두 번 넣지 않습니다.`;
+- 서로 다른 뉴스여야 하며, 같은 사건을 두 번 넣지 않습니다.${recentRule(recent)}`;
 }
 
 // "### N" 블록을 항목으로 파싱. 각 항목의 원문 내 위치(start/end)를 함께 돌려주어
@@ -502,10 +503,10 @@ function transientBackoffMs(nth) {
 
 // 모델 종류에 따라 Claude 또는 Gemini를 부르고 항목을 파싱한다 (링크 변환 제외).
 // { items, chunkUris, finishReason, format } 반환. 실패 시 throw.
-async function fetchRawItems(model = MODEL, want = config.total) {
+async function fetchRawItems(model = MODEL, want = config.total, recent = []) {
   const todayKst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
   if (isClaudeModel(model)) {
-    return fetchClaudeItems(model, want, { todayKst, parseList: parseNewsList, isArticle: isLikelyArticle });
+    return fetchClaudeItems(model, want, { todayKst, parseList: parseNewsList, isArticle: isLikelyArticle, recent });
   }
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -513,13 +514,13 @@ async function fetchRawItems(model = MODEL, want = config.total) {
     e.status = 401;
     throw e;
   }
-  return fetchGeminiItems(apiKey, model, want, todayKst);
+  return fetchGeminiItems(apiKey, model, want, todayKst, recent);
 }
 
 // Gemini API 호출 + 파싱
-async function fetchGeminiItems(apiKey, model, want, todayKst) {
+async function fetchGeminiItems(apiKey, model, want, todayKst, recent = []) {
   const format = outputFormatFor(model);
-  const PROMPT = format === "list" ? buildListPrompt(config, want) : buildPrompt(config, want);
+  const PROMPT = format === "list" ? buildListPrompt(config, want, recent) : buildPrompt(config, want, recent);
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -614,12 +615,17 @@ async function fetchGeminiItems(apiKey, model, want, todayKst) {
 }
 
 // want: 모델에 요청할 건수 (기본 config.total). 선별 단계가 있으면 config.candidates를 넘긴다.
-export async function fetchNews({ want = config.total } = {}) {
+// recent: 최근 발송 헤드라인 [{ date, category, headline }] — 수집 요청에 넣어 같은 사건을 다시 고르지 않게 한다
+export async function fetchNews({ want = config.total, recent = [] } = {}) {
   // 백업 모델은 인증 정보가 있을 때만 쓴다 (예: Claude 기본 + GEMINI_API_KEY 있음 → Gemini로 넘김)
   let fallbackBroken = false; // 백업 모델 자체가 실패(잘못된 ID, 할당량 0 등)하면 기본 모델로 복귀
   const fallbackUsable = () =>
     Boolean(FALLBACK_MODEL) && FALLBACK_MODEL !== MODEL && !fallbackBroken && hasCredentialsFor(FALLBACK_MODEL);
   console.log(`[fetch-news] 목표 ${config.total}건, 요청 ${want}건 (모델 ${MODEL}, 백업 ${fallbackUsable() ? FALLBACK_MODEL : "없음"})`);
+  if (recent.length) {
+    const dates = [...new Set(recent.map((r) => r.date.slice(5)))];
+    console.log(`[fetch-news] 최근 발송 ${recent.length}건(${dates.join("·")})과 같은 사건은 빼도록 요청`);
+  }
 
   // 항목이 너무 적으면(잘림) 또는 실제 기사 링크가 너무 적으면(그라운딩 누락=환각 의심)
   // 재시도하며, 가장 좋은 결과(실제 링크 수 → 항목 수 순)를 보관한다.
@@ -640,7 +646,7 @@ export async function fetchNews({ want = config.total } = {}) {
     const minGrounded = minGroundedLinks(askFor);
     let waitMs = 0;
     try {
-      const r = await fetchRawItems(model, askFor);
+      const r = await fetchRawItems(model, askFor, recent);
       // 링크를 실제 기사 URL로 변환·검증 (만료/404/톱페이지 방지) + 품질 집계
       r.stats = await resolveAllLinks(r.items, r.chunkUris);
       // Gemini는 게시일을 따로 확인해 오래된 기사를 빼고 다시 집계한다. 많이 빠지면 아래 기준에 걸려 재수집된다.

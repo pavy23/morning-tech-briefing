@@ -132,6 +132,8 @@ Measured on 2026-10-08 (Sonnet 5.5, three runs): all 16–18 items had an addres
 
 **Category top-up** — how many stories one request returns varies from 10 to 18 a day. The 2026-10-08 Actions check got only 12, and both robotics candidates were dropped as repeats, so the briefing had no robotics story. So when a category has fewer stories with a confirmed article address than selection needs (the config `count` + 1), a **short fresh request** looks for more in just those categories (up to `NEWS_TOPUP_SEARCHES` searches, publication up to 72 hours old, with the stories already chosen listed to avoid duplicates). Continuing the first conversation instead re-wrote its search results to the cache and cost $1.70 a run; the fresh request cost $1.16.
 
+**Avoiding recent stories** — the collection requests (the Claude request and its category top-up, and the Gemini backup) include the headlines of the last three briefings (about 30) and ask for no event already covered, while later developments ("launch imminent" → launched, talks → a signed deal) are still welcome. On 2026-11-08, 9 of 19 candidates were dropped as repeats and no spare candidate was left. Jev still makes the final repeat call against 14 days of history. Log line: `[fetch-news] 최근 발송 30건(11-05·11-06·11-07)과 같은 사건은 빼도록 요청`.
+
 **Gemini (backup)** — The URLs Gemini returns are either Google grounding redirects (which expire and 404 later) or addresses the
 model made up. So `fetch-news.mjs` does the following **at collection time**:
 
@@ -173,7 +175,7 @@ Jev does not generate text; it returns typed judgments only (a yes/no probabilit
 | Reader relevance | 0–3 score against the role and interests in `READER_PROFILE` (Score) | Recorded only (a proposed order is logged) |
 | Category | One of the configured categories (Choice) | Recorded only |
 
-**Selection flow**: ask Gemini for twice the target (`candidates` in `briefing.config.json`, default 20) → Jev judges →
+**Selection flow**: ask the collection model for twice the target (`candidates` in `briefing.config.json`, default 20), excluding events from the last three briefings → Jev judges →
 remove off-topic, generic, repeats and duplicates → fill the configured category quotas (e.g. AI 3, XR 2, space 2, robotics 3) →
 top up in order with what remains. Ordering keeps Gemini's importance order. Relevance ordering will be enabled after the reader has graded it.
 
