@@ -7,6 +7,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config, quotasFor, normalizeCategory } from "./config.mjs";
 import { recordUsage } from "./cost.mjs";
+import { recentBlock, recentRule } from "./history.mjs";
 
 export function isClaudeModel(model) {
   return /^claude-/i.test(String(model || ""));
@@ -36,7 +37,7 @@ const effortLevel = () => String(process.env.NEWS_EFFORT || "medium").trim().toL
 // 서버 쪽 검색 루프는 10회 반복마다 pause_turn으로 멈춘다. 그대로 돌려보내 이어 가게 하는 횟수 상한.
 const MAX_CONTINUATIONS = 5;
 
-export function buildClaudePrompt(cfg = config, want = cfg.total, budget = searchBudget()) {
+export function buildClaudePrompt(cfg = config, want = cfg.total, budget = searchBudget(), recent = []) {
   const quotas = quotasFor(want, cfg);
   const allowed = cfg.categories.map((c) => c.key).join(", ");
   const scope = cfg.categories
@@ -48,7 +49,7 @@ export function buildClaudePrompt(cfg = config, want = cfg.total, budget = searc
 분야와 권장 건수:
 ${scope}
 
-### 1
+${recentBlock(recent)}### 1
 카테고리: ${cfg.categories[0].key}
 헤드라인: 한국어 헤드라인 (60자 이내)
 요약: 핵심 내용 요약 (100~150자 한국어). 검색으로 확인한 사실만 쓰고, 기사에 있는 구체적 수치·고유명사를 포함하세요.
@@ -66,7 +67,7 @@ URL: 검색 결과에 나온 그 기사의 주소 그대로
 - 웹 검색은 최대 ${budget}회까지 쓸 수 있고, 한도를 넘기면 그 검색은 실패합니다. 분야마다 고르게 나눠 쓰세요.
 - 카테고리는 반드시 ${allowed} 중 하나, 중요도는 high 또는 medium
 - 각 항목은 "### 번호"로 시작하고, 위 일곱 줄만 씁니다. 머리말·맺음말·표는 쓰지 않습니다.
-- 서로 다른 뉴스여야 하며, 같은 사건을 두 번 넣지 않습니다.`;
+- 서로 다른 뉴스여야 하며, 같은 사건을 두 번 넣지 않습니다.${recentRule(recent)}`;
 }
 
 // 인증: ANTHROPIC_API_KEY(워크스페이스 전용 키 권장). 여러 워크스페이스용 개인 키라면
@@ -226,7 +227,7 @@ export function categoryShortfall(items, want, isArticle, cfg = config) {
 // 보충은 첫 대화를 잇지 않고 짧은 새 대화로 보낸다. 첫 대화를 이으면 앞의 검색 결과 전체(30만 토큰 안팎)가
 // 캐시에 다시 쓰여 1회 비용이 두 배($0.84 → $1.70, 2026-10-08 실측)가 됐다. 새 대화로는 $1.16.
 // 기사가 드문 분야를 채우려는 것이라 게시 시점은 72시간까지 허용한다 (재탕은 Jev가 이력과 비교해 거른다).
-export function buildTopupPrompt(short, existing, nextNo, budget, cfg = config) {
+export function buildTopupPrompt(short, existing, nextNo, budget, cfg = config, recent = []) {
   const scope = short
     .map((x) => {
       const c = cfg.categories.find((cat) => cat.key === x.key);
@@ -243,7 +244,7 @@ ${scope}
 이미 고른 기사 (같은 사건은 넣지 않습니다):
 ${taken}
 
-### ${nextNo}
+${recentBlock(recent)}### ${nextNo}
 카테고리: ${short[0].key}
 헤드라인: 한국어 헤드라인 (60자 이내)
 요약: 핵심 내용 요약 (100~150자 한국어). 검색으로 확인한 사실만 쓰고, 기사에 있는 구체적 수치·고유명사를 포함하세요.
@@ -259,7 +260,7 @@ URL: 검색 결과에 나온 그 기사의 주소 그대로
 - 웹 검색은 최대 ${budget}회까지 쓸 수 있고, 한도를 넘기면 그 검색은 실패합니다.
 - 중요도는 high 또는 medium
 - 번호는 ${nextNo}번부터 이어 쓰고, 각 항목은 "### 번호"로 시작해 위 일곱 줄만 씁니다. 머리말·맺음말·표는 쓰지 않습니다.
-- 찾지 못하면 찾은 만큼만 씁니다.`;
+- 찾지 못하면 찾은 만큼만 씁니다.${recentRule(recent)}`;
 }
 
 // 같은 항목이 두 번 나오면(보충 단계에서 반복 등) 앞의 것만 남긴다. 요약 페이지 주소는 여러 소식이
@@ -278,7 +279,7 @@ function dedupeItems(items, isArticle) {
 // Claude 호출 + 목록 파싱 + 출처 확인 (+ 모자란 분야 보충).
 // parseList는 fetch-news.mjs의 "### N" 파서, isArticle은 기사 주소 판별 함수를 받는다.
 // 반환 형태는 Gemini 경로와 같다: { items, chunkUris, finishReason, format }
-export async function fetchClaudeItems(model, want, { todayKst, parseList, isArticle = () => true }) {
+export async function fetchClaudeItems(model, want, { todayKst, parseList, isArticle = () => true, recent = [] }) {
   const budget = searchBudget();
   const responses = [];
 
@@ -323,13 +324,13 @@ export async function fetchClaudeItems(model, want, { todayKst, parseList, isArt
   let result;
   let topup = null;
   try {
-    await converse(buildClaudePrompt(config, want, budget), budget);
+    await converse(buildClaudePrompt(config, want, budget, recent), budget);
     result = parseAll();
     const short = categoryShortfall(result.items, want, isArticle);
     const extraBudget = topupBudget();
     if (short.length && extraBudget > 0 && result.items.length > 0) {
       const before = result.items.length;
-      await converse(buildTopupPrompt(short, result.items, before + 1, extraBudget), extraBudget);
+      await converse(buildTopupPrompt(short, result.items, before + 1, extraBudget, config, recent), extraBudget);
       result = parseAll();
       topup = { short, added: result.items.length - before };
     }

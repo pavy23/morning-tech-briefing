@@ -6,7 +6,7 @@ import { buildEmailHTML, buildEmailText, buildSubject } from "./email-template.m
 import { sendEmail } from "./send-email.mjs";
 import { isJudgeEnabled, runShadowJudgments, formatShadowReport } from "./judge.mjs";
 import { selectItems, formatSelection } from "./select.mjs";
-import { loadHistory, appendHistory, previousHeadlines, todayKst } from "./history.mjs";
+import { loadHistory, appendHistory, previousHeadlines, recentHeadlines, todayKst } from "./history.mjs";
 import { isScheduledRun, alreadySent, scheduleDelay } from "./schedule.mjs";
 import {
   recordUsage, loadLedger, appendLedger, buildRunRecord, costOverview,
@@ -129,7 +129,8 @@ async function runBriefing({ today, history, ledger, run }) {
   const active = isJudgeEnabled() && JEV_SELECT;
   const want = active ? config.candidates : config.total;
   console.log(`📡 뉴스 수집 중... (모드: ${active ? "Jev 선별" : isJudgeEnabled() ? "Jev 섀도" : "수집 결과 그대로"})`);
-  const news = await fetchNews({ want });
+  // 최근 3번의 발송 헤드라인을 수집 요청에 넣어 같은 사건을 처음부터 덜 모으게 한다 (최종 재탕 판정은 Jev가 14일치로)
+  const news = await fetchNews({ want, recent: recentHeadlines(history, today) });
   run.model = news.model;
   console.log(
     `✓ ${news.items.length}개 후보 수집 완료 (모델: ${news.model}, ` +
